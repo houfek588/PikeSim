@@ -1,9 +1,3 @@
-//
-// Created by houfe on 17.06.2026.
-//
-
-#include "main.h"
-
 #include "raylib.h"
 #include "raymath.h"
 #include <vector>
@@ -15,9 +9,9 @@ const int SCREEN_WIDTH = 1200;
 const int SCREEN_HEIGHT = 800;
 
 enum class Role {
-    PIKEMAN,    // Řadový pikenýr
-    NCO,        // Poddůstojník (v rozích)
-    LEADER      // Kapitán / Velitel (vpředu uprostřed)
+    PIKEMAN,    // Řadový pikenýr (tvoří plné jádru formace)
+    NCO,        // Poddůstojník (hlídá rohy vně formace a určuje tempo)
+    LEADER      // Kapitán / Velitel (řídí jednotku zezadu)
 };
 
 enum class PikeState {
@@ -43,6 +37,22 @@ struct Agent {
     float mass;           // Hmotnost (ovlivňuje setrvačnost)
     float maxForce;       // Maximální síla, kterou může vyvinout k dosažení slotu
 };
+
+// Vlastní implementace přerušované čáry, kterou Raylib nemá v základu
+void DrawLineDashed(Vector2 startPos, Vector2 endPos, float dashLength, float spaceLength, Color color) {
+    Vector2 diff = Vector2Subtract(endPos, startPos);
+    float len = Vector2Length(diff);
+    if (len <= 0.0f) return;
+    Vector2 dir = Vector2Normalize(diff);
+    float currentLength = 0.0f;
+    while (currentLength < len) {
+        float drawLength = fminf(dashLength, len - currentLength);
+        Vector2 dashStart = Vector2Add(startPos, Vector2Scale(dir, currentLength));
+        Vector2 dashEnd = Vector2Add(dashStart, Vector2Scale(dir, drawLength));
+        DrawLineV(dashStart, dashEnd, color);
+        currentLength += dashLength + spaceLength;
+    }
+}
 
 // --- TŘÍDA PRO PIKENÝRSKÝ ČTVEREC ---
 class PikeSquare {
@@ -70,54 +80,99 @@ public:
         spacing = space;
         pikeState = PikeState::PORTE;
 
-        // Inicializace 100 vojáků v mřížce
         int idCounter = 0;
-        float colOffset = (cols - 1) / 2.0f;
-        float rowOffset = (rows - 1) / 2.0f;
 
+        // 1. INICIALIZACE PLNÉHO BLOKU PIKENÝRŮ (bez děr v rozích a vzadu)
         for (int row = 0; row < rows; ++row) {
             for (int col = 0; col < cols; ++col) {
                 Agent agent;
                 agent.id = idCounter++;
-
-                // Určení role na základě pozice v mřížce
-                if (row == 0 && col == cols / 2) {
-                    agent.role = Role::LEADER;
-                    agent.mass = 1.2f;
-                    agent.maxForce = 350.0f; // Kapitán táhne nejsilněji
-                } else if ((row == 0 && col == 0) ||
-                           (row == 0 && col == cols - 1) ||
-                           (row == rows - 1 && col == 0) ||
-                           (row == rows - 1 && col == cols - 1)) {
-                    agent.role = Role::NCO;
-                    agent.mass = 1.1f;
-                    agent.maxForce = 280.0f; // Poddůstojníci pevně drží rohy
-                } else {
-                    agent.role = Role::PIKEMAN;
-                    agent.mass = 1.0f;
-                    agent.maxForce = 180.0f; // Řadoví vojáci mají větší setrvačnost
-                }
-
-                // Výpočet počáteční pozice v lokálních souřadnicích mřížky
-                float localX = (col - colOffset) * spacing;
-                float localY = (row - rowOffset) * spacing;
-
-                // Rotace lokální pozice do globálního světa
-                Vector2 rotatedOffset = {
-                    localX * cosf(angle) - localY * sinf(angle),
-                    localX * sinf(angle) + localY * cosf(angle)
-                };
-
-                agent.position = Vector2Add(position, rotatedOffset);
+                agent.role = Role::PIKEMAN;
+                agent.mass = 1.0f;
+                agent.maxForce = 180.0f;
+                agent.position = position;
                 agent.velocity = { 0, 0 };
-                agent.targetSlot = agent.position;
                 agent.angle = angle;
                 agent.pikeAngle = angle;
-                agent.swingTimer = (float)GetRandomValue(0, 100) / 10.0f; // Náhodná fáze houpání
-
+                agent.swingTimer = (float)GetRandomValue(0, 100) / 10.0f;
                 soldiers.push_back(agent);
             }
         }
+
+        // 2. PŘIDÁNÍ PODDŮSTOJNÍKŮ (NCOs) jako dodatečných externích jednotek (4 rohy)
+        for (int i = 0; i < 4; ++i) {
+            Agent agent;
+            agent.id = idCounter++;
+            agent.role = Role::NCO;
+            agent.mass = 1.0f;       // Stejná setrvačnost jako u pikenýrů
+            agent.maxForce = 180.0f; // Stejná maximální síla jako pikenýři pro sjednocení setrvačnosti
+            agent.position = position;
+            agent.velocity = { 0, 0 };
+            agent.angle = angle;
+            agent.pikeAngle = angle;
+            agent.swingTimer = (float)GetRandomValue(0, 100) / 10.0f;
+            soldiers.push_back(agent);
+        }
+
+        // 3. PŘIDÁNÍ VELITELE (Leader) jako dodatečné externí jednotky (za zadní řadou)
+        {
+            Agent agent;
+            agent.id = idCounter++;
+            agent.role = Role::LEADER;
+            agent.mass = 1.0f;       // Stejná setrvačnost jako u pikenýrů
+            agent.maxForce = 180.0f; // Stejná maximální síla jako pikenýři
+            agent.position = position;
+            agent.velocity = { 0, 0 };
+            agent.angle = angle;
+            agent.pikeAngle = angle;
+            agent.swingTimer = (float)GetRandomValue(0, 100) / 10.0f;
+            soldiers.push_back(agent);
+        }
+
+        // První inicializace cílových pozic
+        UpdateTargetSlots();
+        for (auto& agent : soldiers) {
+            agent.position = agent.targetSlot;
+        }
+    }
+
+    // Pomocná metoda pro výpočet globální pozice středu přední řady (Front-Center)
+    Vector2 GetFrontCenter() const {
+        float rowOffset = (rows - 1) / 2.0f;
+        float frontLocalY = -rowOffset * spacing;
+        float rotAngle = angle + PI / 2.0f; // Sladění rotace s pohledem pikenýrů
+        Vector2 rotatedOffset = {
+            localYRotatedX(0, frontLocalY, rotAngle),
+            localYRotatedY(0, frontLocalY, rotAngle)
+        };
+        return Vector2Add(position, rotatedOffset);
+    }
+
+    // Pomocné inline metody pro transformaci souřadnic s offsetem
+    inline float localYRotatedX(float lx, float ly, float rAngle) const {
+        return lx * cosf(rAngle) - ly * sinf(rAngle);
+    }
+    inline float localYRotatedY(float lx, float ly, float rAngle) const {
+        return lx * sinf(rAngle) + ly * cosf(rAngle);
+    }
+
+    // Metoda pro rotaci formace kolem libovolného lokálního bodu (pivotu) bez posunu tohoto bodu v globálním prostoru
+    void RotateAroundLocalPoint(float dAngle, Vector2 localPivot) {
+        float rotAngleOld = angle + PI / 2.0f;
+        Vector2 rotatedOffsetOld = {
+            localPivot.x * cosf(rotAngleOld) - localPivot.y * sinf(rotAngleOld),
+            localPivot.x * sinf(rotAngleOld) + localPivot.y * cosf(rotAngleOld)
+        };
+        Vector2 globalPivot = Vector2Add(position, rotatedOffsetOld);
+
+        angle += dAngle;
+
+        float rotAngleNew = angle + PI / 2.0f;
+        Vector2 rotatedOffsetNew = {
+            localPivot.x * cosf(rotAngleNew) - localPivot.y * sinf(rotAngleNew),
+            localPivot.x * sinf(rotAngleNew) + localPivot.y * cosf(rotAngleNew)
+        };
+        position = Vector2Subtract(globalPivot, rotatedOffsetNew);
     }
 
     // Výpočet ideálních pozic mřížky na základě aktuálního středu a rotace
@@ -125,27 +180,96 @@ public:
         float colOffset = (cols - 1) / 2.0f;
         float rowOffset = (rows - 1) / 2.0f;
         int index = 0;
+        float rotAngle = angle + PI / 2.0f; // Sladění rotace s pohledem pikenýrů
 
+        // 1. Sloty pro 100 řadových pikenýrů (kompaktní čtverec)
         for (int row = 0; row < rows; ++row) {
             for (int col = 0; col < cols; ++col) {
                 float localX = (col - colOffset) * spacing;
                 float localY = (row - rowOffset) * spacing;
 
                 Vector2 rotatedOffset = {
-                    localX * cosf(angle) - localY * sinf(angle),
-                    localX * sinf(angle) + localY * cosf(angle)
+                    localX * cosf(rotAngle) - localY * sinf(rotAngle),
+                    localX * sinf(rotAngle) + localY * cosf(rotAngle)
                 };
 
                 soldiers[index].targetSlot = Vector2Add(position, rotatedOffset);
                 index++;
             }
         }
+
+        // 2. Sloty pro 4 Poddůstojníky (NCOs) - vysunuti diagonálně vně rohů kompaktního bloku
+        float ncoOutFactor = 1.0f; // Vzdálenost diagonálně ven od rohů
+        float cornerOffsets[4][2] = {
+            {-colOffset - ncoOutFactor, -rowOffset - ncoOutFactor}, // Přední levý roh
+            {colOffset + ncoOutFactor, -rowOffset - ncoOutFactor},  // Přední pravý roh
+            {-colOffset - ncoOutFactor, rowOffset + ncoOutFactor},  // Zadní levý roh
+            {colOffset + ncoOutFactor, rowOffset + ncoOutFactor}    // Zadní pravý roh
+        };
+
+        for (int i = 0; i < 4; ++i) {
+            float localX = cornerOffsets[i][0] * spacing;
+            float localY = cornerOffsets[i][1] * spacing;
+
+            Vector2 rotatedOffset = {
+                localX * cosf(rotAngle) - localY * sinf(rotAngle),
+                localX * sinf(rotAngle) + localY * cosf(rotAngle)
+            };
+
+            soldiers[index].targetSlot = Vector2Add(position, rotatedOffset);
+            index++;
+        }
+
+        // 3. Slot pro Velitele (Leader) - tlačen bezpečně doprostřed za zadní řadu
+        {
+            float localX = 0.0f; // Horizontálně uprostřed
+            float localY = (rowOffset + 1.4f) * spacing; // Posunut za zadní řadu
+
+            Vector2 rotatedOffset = {
+                localX * cosf(rotAngle) - localY * sinf(rotAngle),
+                localX * sinf(rotAngle) + localY * cosf(rotAngle)
+            };
+
+            soldiers[index].targetSlot = Vector2Add(position, rotatedOffset);
+        }
+    }
+
+    // Výpočet vlivu poddůstojníků na tempo formace (NCOs určují rychlost čtverce)
+    float GetNcoTempoFactor() const {
+        float maxDev = 0.0f;
+
+        // Zjistíme, jak moc se poddůstojníci (NCOs) odchýlili od svých určených rohů
+        for (const auto& agent : soldiers) {
+            if (agent.role == Role::NCO) {
+                float dist = Vector2Distance(agent.position, agent.targetSlot);
+                if (dist > maxDev) {
+                    maxDev = dist;
+                }
+            }
+        }
+
+        // Hranice pro snížení tempa jsou o něco benevolentnější, aby formace plynule reagovala
+        float startLimit = spacing * 0.40f; // Začátek zpomalování při mírném zaostání
+        float stopLimit = spacing * 2.0f;   // Limit, kdy formace téměř zastaví a čeká na srovnání
+
+        if (maxDev <= startLimit) return 1.0f;
+        if (maxDev >= stopLimit) return 0.15f; // Minimální nouzové tempo (15 %)
+
+        float t = (maxDev - startLimit) / (stopLimit - startLimit);
+        return 1.0f - t * (1.0f - 0.15f);
     }
 
     void Update(float dt) {
-        // 1. Řízení pohybu pivotu (klávesnice / waypoint)
-        float speed = (pikeState == PikeState::PORTE) ? 80.0f : 45.0f; // Za pochodu s píkami dolů se jde pomaleji
-        float rotationSpeed = 0.8f;
+        float tempoFactor = GetNcoTempoFactor();
+
+        // 1. Řízení pohybu (rychlost je ovlivněna tempoFactorem)
+        float baseSpeed = (pikeState == PikeState::PORTE) ? 80.0f : 45.0f;
+        float speed = baseSpeed * tempoFactor;
+        float rotationSpeed = 0.8f * tempoFactor;
+
+        float colOffset = (cols - 1) / 2.0f;
+        float rowOffset = (rows - 1) / 2.0f;
+
         Vector2 moveDir = { 0, 0 };
 
         if (IsKeyDown(KEY_W)) {
@@ -156,28 +280,141 @@ public:
             moveDir.x -= cosf(angle);
             moveDir.y -= sinf(angle);
         }
-        if (IsKeyDown(KEY_A)) {
-            angle -= rotationSpeed * dt;
-        }
-        if (IsKeyDown(KEY_D)) {
-            angle += rotationSpeed * dt;
+
+        // Detekce stisku klávesy Shift
+        bool shiftPressed = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+
+        if (shiftPressed) {
+            // --- SHIFT + A / D - INDIVIDUÁLNÍ OBRAT NA MÍSTĚ O 90° (Změna čela formace) ---
+            if (IsKeyPressed(KEY_A)) {
+                hasWaypoint = false; // Zrušíme případný waypoint pochodu
+
+                // 1. Natočíme celou formaci doleva o 90 stupňů kolem geometrického středu
+                RotateAroundLocalPoint(-PI / 2.0f, { 0.0f, 0.0f });
+
+                // 2. Provedeme maticovou rotaci pikenýrů v poli (0 až 99) proti směru hodinových ručiček.
+                std::vector<Agent> tempPikemen(cols * rows);
+                for (int r = 0; r < rows; ++r) {
+                    for (int c = 0; c < cols; ++c) {
+                        int new_idx = r * cols + c;
+                        int old_idx = (rows - 1 - c) * cols + r; // Přesný matematický CCW převod
+                        tempPikemen[new_idx] = soldiers[old_idx];
+                    }
+                }
+                for (size_t i = 0; i < tempPikemen.size(); ++i) {
+                    soldiers[i] = tempPikemen[i];
+                }
+
+                // 3. Permutujeme poddůstojníky (NCOs) na rozích, aby také zůstali stát na místě
+                // NCOs indexy: 100 = FL, 101 = FR, 102 = BL, 103 = BR
+                Agent oldFL = soldiers[100];
+                Agent oldFR = soldiers[101];
+                Agent oldBL = soldiers[102];
+                Agent oldBR = soldiers[103];
+
+                // Při otočení CCW (Doleva):
+                // Nový FL (100) byl fyzicky na BL (102)
+                // Nový FR (101) byl fyzicky na FL (100)
+                // Nový BL (102) byl fyzicky na BR (103)
+                // Nový BR (103) byl fyzicky na FR (101)
+                soldiers[100] = oldBL;
+                soldiers[101] = oldFL;
+                soldiers[102] = oldBR;
+                soldiers[103] = oldFR;
+            }
+            if (IsKeyPressed(KEY_D)) {
+                hasWaypoint = false; // Zrušíme případný waypoint pochodu
+
+                // 1. Natočíme celou formaci doprava o 90 stupňů kolem geometrického středu
+                RotateAroundLocalPoint(PI / 2.0f, { 0.0f, 0.0f });
+
+                // 2. Provedeme maticovou rotaci pikenýrů v poli (0 až 99) po směru hodinových ručiček.
+                std::vector<Agent> tempPikemen(cols * rows);
+                for (int r = 0; r < rows; ++r) {
+                    for (int c = 0; c < cols; ++c) {
+                        int new_idx = r * cols + c;
+                        int old_idx = c * cols + (cols - 1 - r); // Přesný matematický CW převod
+                        tempPikemen[new_idx] = soldiers[old_idx];
+                    }
+                }
+                for (size_t i = 0; i < tempPikemen.size(); ++i) {
+                    soldiers[i] = tempPikemen[i];
+                }
+
+                // 3. Permutujeme poddůstojníky (NCOs) na rozích, aby také zůstali stát na místě
+                Agent oldFL = soldiers[100];
+                Agent oldFR = soldiers[101];
+                Agent oldBL = soldiers[102];
+                Agent oldBR = soldiers[103];
+
+                // Při otočení CW (Doprava):
+                // Nový FL (100) byl fyzicky na FR (101)
+                // Nový FR (101) byl fyzicky na BR (103)
+                // Nový BL (102) byl fyzicky na FL (100)
+                // Nový BR (103) byl fyzicky na BL (102)
+                soldiers[100] = oldFR;
+                soldiers[101] = oldBR;
+                soldiers[102] = oldFL;
+                soldiers[103] = oldBL;
+            }
+        } else {
+            // A/D - PLNÁ ROTACE (KOLO) KOLEM PŘEDNÍCH ROHŮ
+            if (IsKeyDown(KEY_A)) {
+                // Točení doleva -> osa otáčení je PŘEDNÍ LEVÝ ROH
+                float dAngle = -rotationSpeed * dt;
+                Vector2 localPivot = { -colOffset * spacing, -rowOffset * spacing };
+                RotateAroundLocalPoint(dAngle, localPivot);
+            }
+            if (IsKeyDown(KEY_D)) {
+                // Točení doprava -> osa otáčení je PŘEDNÍ PRAVÝ ROH
+                float dAngle = rotationSpeed * dt;
+                Vector2 localPivot = { colOffset * spacing, -rowOffset * spacing };
+                RotateAroundLocalPoint(dAngle, localPivot);
+            }
         }
 
-        // Ovládání pomocí waypointu (kliknutí myší)
+        // Dvoufázové ovládání pomocí waypointu: 1. otočení kolem příslušného předního rohu, 2. pochod vpřed jako W
         if (hasWaypoint) {
-            Vector2 toWaypoint = Vector2Subtract(targetPos, position);
+            Vector2 frontCenter = GetFrontCenter();
+            Vector2 toWaypoint = Vector2Subtract(targetPos, frontCenter);
             float dist = Vector2Length(toWaypoint);
+
             if (dist > 5.0f) {
                 Vector2 dir = Vector2Normalize(toWaypoint);
-                moveDir = Vector2Add(moveDir, dir);
-
-                // Plynulé otáčení směrem k cíli
                 float targetAngleNew = atan2f(dir.y, dir.x);
-                // Vyhlazení přechodu úhlu (předcházení skokům o 360 stupňů)
                 float angleDiff = targetAngleNew - angle;
                 while (angleDiff < -PI) angleDiff += 2 * PI;
                 while (angleDiff > PI) angleDiff -= 2 * PI;
-                angle += angleDiff * 2.0f * dt;
+
+                // Určení, zda jsme dostatečně otočení (tolerance cca 1.7 stupně pro plynulý přechod do pochodu)
+                bool isAligned = fabsf(angleDiff) < 0.03f;
+
+                if (!isAligned) {
+                    // FÁZE 1: Pouze otáčení na místě kolem předního rohu (žádný pohyb vpřed)
+                    float maxRotation = rotationSpeed * dt;
+                    float dAngle = 0.0f;
+                    Vector2 localPivot;
+
+                    if (angleDiff < 0.0f) {
+                        // Cíl je vlevo -> otáčení doleva kolem PŘEDNÍHO LEVÉHO rohu
+                        dAngle = fmaxf(-maxRotation, angleDiff);
+                        localPivot = { -colOffset * spacing, -rowOffset * spacing };
+                    } else {
+                        // Cíl je vpravo -> otáčení doprava kolem PŘEDNÍHO PRAVÉHO rohu
+                        dAngle = fminf(maxRotation, angleDiff);
+                        localPivot = { colOffset * spacing, -rowOffset * spacing };
+                    }
+                    RotateAroundLocalPoint(dAngle, localPivot);
+                } else {
+                    // FÁZE 2: Soudržný pochod vpřed (pohybujeme se podél aktuálního vektoru pohledu čtverce)
+                    moveDir.x += cosf(angle);
+                    moveDir.y += sinf(angle);
+
+                    // Během pochodu udržujeme jemnou korekci směru (kolem Front-Center pivotu pro přirozenou chůzi)
+                    float dAngle = angleDiff * 2.0f * dt;
+                    Vector2 localPivot = { 0.0f, -rowOffset * spacing }; // Front-Center
+                    RotateAroundLocalPoint(dAngle, localPivot);
+                }
             } else {
                 hasWaypoint = false;
             }
@@ -188,7 +425,6 @@ public:
             position = Vector2Add(position, Vector2Scale(moveDir, speed * dt));
         }
 
-        // Udržování úhlu v rozmezí -PI až PI
         while (angle < -PI) angle += 2 * PI;
         while (angle > PI) angle -= 2 * PI;
 
@@ -203,14 +439,15 @@ public:
             Vector2 springForce = { 0, 0 };
 
             if (distToSlot > 0.1f) {
-                float k = (agent.role == Role::LEADER) ? 12.0f : (agent.role == Role::NCO ? 9.0f : 6.0f);
+                // Všichni agenti (včetně velitelů) sdílí naprosto shodnou tuhost pružiny k = 6.0f!
+                // To zajišťuje, že se pohybují se stejnou kinetickou pružností a setrvačností.
+                float k = 6.0f;
                 springForce = Vector2Scale(Vector2Normalize(toSlot), distToSlot * k);
             }
 
-            // Repulzní síla mezi vojáky (aby do sebe nenaráželi a drželi rozestup)
+            // Repulzní kolizní sféry mezi vojáky (udržování rozestupu)
             Vector2 separationForce = { 0, 0 };
             float personalRadius = spacing * 0.75f;
-            int neighborsCount = 0;
 
             for (const auto& other : soldiers) {
                 if (agent.id == other.id) continue;
@@ -218,15 +455,16 @@ public:
                 float dist = Vector2Length(toAgent);
                 if (dist < personalRadius && dist > 0.01f) {
                     float push = (personalRadius - dist) / personalRadius;
-                    separationForce = Vector2Add(separationForce, Vector2Scale(Vector2Normalize(toAgent), push * 300.0f));
-                    neighborsCount++;
+                    // Sjednoceno na faktor 300.0f pro všechny, aby se zamezilo clippingu a anomáliím v rozích
+                    float factor = 300.0f;
+                    separationForce = Vector2Add(separationForce, Vector2Scale(Vector2Normalize(toAgent), push * factor));
                 }
             }
 
             // Výsledná síla aplikovaná na agenta
             Vector2 totalForce = Vector2Add(springForce, separationForce);
 
-            // Omezení maximální síly podle role (velitelé mají větší sílu se prosadit)
+            // Omezení maximální síly podle sjednocených vlastností
             float forceMag = Vector2Length(totalForce);
             if (forceMag > agent.maxForce) {
                 totalForce = Vector2Scale(Vector2Normalize(totalForce), agent.maxForce);
@@ -236,7 +474,17 @@ public:
             Vector2 acceleration = Vector2Scale(totalForce, 1.0f / agent.mass);
             agent.velocity = Vector2Add(agent.velocity, Vector2Scale(acceleration, dt));
 
-            // Tlumení pohybu (odpor prostředí a tření nohou o zem)
+            // BEZPEČNOSTNÍ RYCHLOSTNÍ LIMIT (Rychlostní rozpočet zamezuje "raketovému" efektu a únikům)
+            // Zahrnuje translační rychlost formace + rotační poloměr rohů
+            float maxAllowedSpeed = speed * 1.5f + rotationSpeed * 160.0f;
+            maxAllowedSpeed = fmaxf(maxAllowedSpeed, 60.0f); // Spodní hranice pro bezpečný návrat do slotů, když formace stojí
+
+            float speedCurrent = Vector2Length(agent.velocity);
+            if (speedCurrent > maxAllowedSpeed) {
+                agent.velocity = Vector2Scale(Vector2Normalize(agent.velocity), maxAllowedSpeed);
+            }
+
+            // Tlumení pohybu (tření o zem)
             agent.velocity = Vector2Scale(agent.velocity, 0.85f);
             agent.position = Vector2Add(agent.position, Vector2Scale(agent.velocity, dt));
 
@@ -246,37 +494,32 @@ public:
             while (angleDiff > PI) angleDiff -= 2 * PI;
             agent.angle += angleDiff * 5.0f * dt;
 
-            // 3. Fyzikální houpání (Swaying) píky za chůze
-            float speedCurrent = Vector2Length(agent.velocity);
-            if (speedCurrent > 5.0f) {
-                agent.swingTimer += speedCurrent * 0.1f * dt;
+            // 3. Fyzikální houpání píky za chůze
+            float agentSpeed = Vector2Length(agent.velocity);
+            if (agentSpeed > 5.0f) {
+                agent.swingTimer += agentSpeed * 0.1f * dt;
             } else {
-                // Pomalé uklidnění píky do stabilní polohy, pokud voják stojí
                 agent.swingTimer = Lerp(agent.swingTimer, 0.0f, 5.0f * dt);
             }
 
             float swayAmplitude = (pikeState == PikeState::PORTE) ? 0.06f : 0.12f;
             float sway = sinf(agent.swingTimer) * swayAmplitude;
 
-            // Nastavení úhlu píky podle stavu formace
             if (pikeState == PikeState::PORTE) {
-                // Vertikální nesení píky (mírně nakloněná vpřed + houpání do stran)
                 agent.pikeAngle = agent.angle - 0.1f + sway;
             } else {
-                // Skloněná píka k útoku (přímo vpřed + vertikální kmitání)
                 agent.pikeAngle = agent.angle + sway;
             }
         }
     }
 
-    // Výpočet indexu soudržnosti (0.0f = totální rozpad, 1.0f = dokonalá formace)
+    // Výpočet indexu soudržnosti (0.0f = rozpad, 1.0f = dokonalá formace)
     float GetCohesionIndex() const {
         float totalDeviation = 0.0f;
         for (const auto& agent : soldiers) {
             totalDeviation += Vector2Distance(agent.position, agent.targetSlot);
         }
         float avgDeviation = totalDeviation / soldiers.size();
-        // Pokud je průměrná odchylka větší než spacing * 1.5, soudržnost klesá k nule
         float maxAllowedDev = spacing * 1.5f;
         float cohesion = 1.0f - (avgDeviation / maxAllowedDev);
         if (cohesion < 0.0f) cohesion = 0.0f;
@@ -286,13 +529,12 @@ public:
 
 // --- FUNKCE PRO VYKRESLENÍ ---
 void DrawEngravingAgent(const Agent& agent, float spacing, PikeState state) {
-    // Barvy pro styl staré rytiny (odstíny inkoustu a sépie)
     Color inkDark = { 45, 38, 34, 255 };
     Color inkLight = { 120, 110, 100, 255 };
     Color plumeColor = inkLight;
 
     if (agent.role == Role::LEADER) plumeColor = { 180, 50, 40, 255 }; // Výrazné červené pero velitele
-    else if (agent.role == Role::NCO) plumeColor = { 190, 130, 40, 255 }; // Oranžové/žluté pero poddůstojníka
+    else if (agent.role == Role::NCO) plumeColor = { 190, 130, 40, 255 }; // Oranžové pero poddůstojníka
 
     Vector2 pos = agent.position;
     float r = spacing * 0.35f;
@@ -300,60 +542,54 @@ void DrawEngravingAgent(const Agent& agent, float spacing, PikeState state) {
     // Kreslení stínu na papíře
     DrawCircleSector(Vector2Add(pos, {2, 3}), r, 0, 360, 8, {0, 0, 0, 40});
 
-    // Tělo vojáka (Základní kruh)
+    // Tělo vojáka
     DrawCircleSector(pos, r, 0, 360, 12, inkLight);
     DrawCircleLines(pos.x, pos.y, r, inkDark);
 
-    // Směrová čára ramen (kolmo na pohled)
+    // Směrová čára ramen
     Vector2 leftShoulder = { pos.x - r * sinf(agent.angle), pos.y + r * cosf(agent.angle) };
     Vector2 rightShoulder = { pos.x + r * sinf(agent.angle), pos.y - r * cosf(agent.angle) };
     DrawLineEx(leftShoulder, rightShoulder, 1.5f, inkDark);
 
-    // Přilba (středový lesklý bod s inkoustovým okrajem)
+    // Přilba
     DrawCircle(pos.x, pos.y, r * 0.5f, { 220, 220, 220, 255 });
     DrawCircleLines(pos.x, pos.y, r * 0.5f, inkDark);
 
-    // Plume (pero na přilbě) směrem dozadu
+    // Plume (pero na přilbě)
     Vector2 plumeDir = { -cosf(agent.angle), -sinf(agent.angle) };
     Vector2 plumePos = Vector2Add(pos, Vector2Scale(plumeDir, r * 0.6f));
     DrawCircle(plumePos.x, plumePos.y, r * 0.3f, plumeColor);
     DrawCircleLines(plumePos.x, plumePos.y, r * 0.3f, inkDark);
 
-    // Vykreslení zbraně (Píka / Halapartna)
+    // Vykreslení zbraně
     float pikeLength = (state == PikeState::PORTE) ? spacing * 1.8f : spacing * 3.5f;
     Vector2 pikeDir = { cosf(agent.pikeAngle), sinf(agent.pikeAngle) };
 
-    // Počátek zbraně (v pravé ruce/rameni)
     Vector2 weaponStart = Vector2Add(pos, Vector2Scale({ sinf(agent.angle), -cosf(agent.angle) }, r * 0.4f));
     Vector2 weaponEnd = Vector2Add(weaponStart, Vector2Scale(pikeDir, pikeLength));
 
-    // Stín píky na papíře
     DrawLineEx(Vector2Add(weaponStart, {3, 5}), Vector2Add(weaponEnd, {3, 5}), 1.0f, {0, 0, 0, 30});
 
     if (agent.role == Role::NCO) {
-        // Poddůstojník má halapartnu (kratší ratiště, široká sekera na konci)
+        // Poddůstojník má halapartnu
         float halberdLength = spacing * 1.5f;
         Vector2 halberdEnd = Vector2Add(weaponStart, Vector2Scale(pikeDir, halberdLength));
-        // Ratiště
-        DrawLineEx(weaponStart, halberdEnd, 1.8f, { 95, 75, 55, 255 }); // hnědé dřevo
+        DrawLineEx(weaponStart, halberdEnd, 1.8f, { 95, 75, 55, 255 });
         DrawLineEx(weaponStart, halberdEnd, 1.0f, inkDark);
-        // Hrot a sekera halapartny
         Vector2 headPos = Vector2Subtract(halberdEnd, Vector2Scale(pikeDir, 3.0f));
         DrawCircleSector(headPos, 4.0f, 0, 360, 4, { 180, 185, 190, 255 });
         DrawCircleSectorLines(headPos, 4.0f, 0, 360, 4, inkDark);
     } else if (agent.role == Role::LEADER) {
-        // Velitel má tasený meč směřující dopředu
+        // Velitel má tasený meč
         float swordLength = spacing * 1.1f;
         Vector2 swordEnd = Vector2Add(weaponStart, Vector2Scale(pikeDir, swordLength));
         DrawLineEx(weaponStart, swordEnd, 1.5f, { 200, 200, 205, 255 });
         DrawLineEx(weaponStart, swordEnd, 0.8f, inkDark);
     } else {
         // Klasická dlouhá píka
-        // Ratiště (dřevěná dlouhá tyč)
-        DrawLineEx(weaponStart, weaponEnd, 1.5f, { 115, 85, 60, 255 }); // dřevěný tón
+        DrawLineEx(weaponStart, weaponEnd, 1.5f, { 115, 85, 60, 255 });
         DrawLineEx(weaponStart, weaponEnd, 0.8f, inkDark);
 
-        // Kovový hrot píky
         Vector2 tipBack = Vector2Subtract(weaponEnd, Vector2Scale(pikeDir, 6.0f));
         Vector2 tipLeft = { tipBack.x - 2.5f * sinf(agent.pikeAngle), tipBack.y + 2.5f * cosf(agent.pikeAngle) };
         Vector2 tipRight = { tipBack.x + 2.5f * sinf(agent.pikeAngle), tipBack.y - 2.5f * cosf(agent.pikeAngle) };
@@ -364,78 +600,61 @@ void DrawEngravingAgent(const Agent& agent, float spacing, PikeState state) {
 }
 
 void DrawVectorAgent(const Agent& agent, float spacing, PikeState state) {
-    Color coreColor = { 0, 200, 255, 255 };      // Cyan pro běžné pikenýry
-    if (agent.role == Role::LEADER) coreColor = { 255, 50, 50, 255 };  // Červená pro velitele
-    else if (agent.role == Role::NCO) coreColor = { 255, 180, 0, 255 }; // Žlutá pro poddůstojníky
+    Color coreColor = { 0, 200, 255, 255 };
+    if (agent.role == Role::LEADER) coreColor = { 255, 50, 50, 255 };
+    else if (agent.role == Role::NCO) coreColor = { 255, 180, 0, 255 };
 
     Vector2 pos = agent.position;
     float r = spacing * 0.25f;
 
-    // Vykreslení ideálního slotu (tenký terčík)
     DrawCircleLines(agent.targetSlot.x, agent.targetSlot.y, 3.0f, { 100, 100, 100, 100 });
-    // Čára spojující vojáka s jeho slotem (vizualizace napětí pružiny)
     DrawLineV(pos, agent.targetSlot, { 255, 255, 255, 50 });
 
-    // Tělo vojáka (Svítící bod)
     DrawCircleV(pos, r, coreColor);
     DrawCircleLines(pos.x, pos.y, r + 1, { 255, 255, 255, 150 });
 
-    // Vektor pohybu (zelená čára ukazuje rychlost a směr)
     Vector2 velEnd = Vector2Add(pos, Vector2Scale(agent.velocity, 0.15f));
     DrawLineV(pos, velEnd, { 0, 255, 100, 180 });
 
-    // Píka jako ostrá vektorová linka
     float pikeLength = (state == PikeState::PORTE) ? spacing * 1.5f : spacing * 3.2f;
     Vector2 pikeDir = { cosf(agent.pikeAngle), sinf(agent.pikeAngle) };
     Vector2 weaponEnd = Vector2Add(pos, Vector2Scale(pikeDir, pikeLength));
 
-    // Barva píky reflektuje rychlost (stres / dynamiku pohybu)
     float speed = Vector2Length(agent.velocity);
     Color pikeColor = { 150, 230, 150, 180 };
-    if (speed > 40.0f) pikeColor = { 255, 230, 100, 200 }; // Žlutá při prudším manévru
+    if (speed > 40.0f) pikeColor = { 255, 230, 100, 200 };
 
     DrawLineEx(pos, weaponEnd, 1.2f, pikeColor);
-    DrawCircleV(weaponEnd, 2.0f, { 255, 255, 255, 225 }); // Svítící hrot
+    DrawCircleV(weaponEnd, 2.0f, { 255, 255, 255, 225 });
 }
 
 // --- HLAVNÍ FUNKCE ---
 int main() {
-    // Inicializace okna
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Pike Square Simulator - Prototype Milestone 1");
     SetTargetFPS(60);
 
-    // Inicializace pikenýrského čtverce uprostřed obrazovky
     PikeSquare square(SCREEN_WIDTH / 2.0f, SCREEN_HEIGHT / 2.0f, 10, 10, 26.0f);
-
     VisualMode visualMode = VisualMode::ENGRAVING;
-
-    // Načtení barev pro pozadí starého papíru
     Color paperBase = { 235, 222, 200, 255 };
-    Color paperShadow = { 220, 206, 182, 255 };
 
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
-        if (dt > 0.1f) dt = 0.1f; // Prevence velkých skoků při záseku FPS
+        if (dt > 0.1f) dt = 0.1f;
 
         // --- VSTUPY OD HRÁČE ---
-
-        // Přepínání vizuálního módu (T)
         if (IsKeyPressed(KEY_T)) {
             visualMode = (visualMode == VisualMode::ENGRAVING) ? VisualMode::VECTOR : VisualMode::ENGRAVING;
         }
 
-        // Přepínání stavu pík (Mezerník)
         if (IsKeyPressed(KEY_SPACE)) {
             square.pikeState = (square.pikeState == PikeState::PORTE) ? PikeState::CHARGE : PikeState::PORTE;
         }
 
-        // Nastavení waypointu kliknutím pravým nebo levým tlačítkem myši
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             square.targetPos = GetMousePosition();
             square.hasWaypoint = true;
         }
 
-        // Zrušení waypointu (pravým tlačítkem)
         if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
             square.hasWaypoint = false;
         }
@@ -447,10 +666,8 @@ int main() {
         BeginDrawing();
 
         if (visualMode == VisualMode::ENGRAVING) {
-            // Režim staré rytiny
             ClearBackground(paperBase);
 
-            // Vykreslení jemné dobové mřížky/textury na papíře
             for (int i = 0; i < SCREEN_WIDTH; i += 40) {
                 DrawLine(i, 0, i, SCREEN_HEIGHT, { 0, 0, 0, 12 });
             }
@@ -458,62 +675,63 @@ int main() {
                 DrawLine(0, j, SCREEN_WIDTH, j, { 0, 0, 0, 12 });
             }
 
-            // Vykreslení waypointu
             if (square.hasWaypoint) {
                 DrawCircleLines(square.targetPos.x, square.targetPos.y, 8.0f, { 160, 50, 40, 150 });
                 DrawCircle(square.targetPos.x, square.targetPos.y, 3.0f, { 160, 50, 40, 200 });
-                DrawLineDashed(square.position, square.targetPos, 4.0f, 2.0f, { 160, 50, 40, 100 });
+                DrawLineDashed(square.GetFrontCenter(), square.targetPos, 4.0f, 2.0f, { 160, 50, 40, 100 });
             }
 
-            // Vykreslení všech vojáků
             for (const auto& soldier : square.soldiers) {
                 DrawEngravingAgent(soldier, square.spacing, square.pikeState);
             }
 
         } else {
-            // Minimalistický vektorový režim
             ClearBackground({ 15, 17, 22, 255 });
 
-            // Vykreslení obrysu cílové mřížky formace
+            // Výpočet mřížky pro 100 pikenýrů (0 až 99)
             Vector2 topLeft = square.soldiers[0].targetSlot;
             Vector2 topRight = square.soldiers[square.cols - 1].targetSlot;
-            Vector2 bottomLeft = square.soldiers[square.soldiers.size() - square.cols].targetSlot;
-            Vector2 bottomRight = square.soldiers[square.soldiers.size() - 1].targetSlot;
+            Vector2 bottomLeft = square.soldiers[(square.rows - 1) * square.cols].targetSlot;
+            Vector2 bottomRight = square.soldiers[square.rows * square.cols - 1].targetSlot;
 
             DrawLineV(topLeft, topRight, { 0, 255, 100, 60 });
             DrawLineV(topRight, bottomRight, { 0, 255, 100, 60 });
             DrawLineV(bottomRight, bottomLeft, { 0, 255, 100, 60 });
             DrawLineV(bottomLeft, topLeft, { 0, 255, 100, 60 });
 
-            // Vykreslení waypointu
             if (square.hasWaypoint) {
                 DrawCircleLines(square.targetPos.x, square.targetPos.y, 12.0f, { 0, 255, 255, 200 });
-                DrawLineV(square.position, square.targetPos, { 0, 255, 255, 100 });
+                DrawLineV(square.GetFrontCenter(), square.targetPos, { 0, 255, 255, 100 });
             }
 
-            // Vykreslení všech vojáků
             for (const auto& soldier : square.soldiers) {
                 DrawVectorAgent(soldier, square.spacing, square.pikeState);
             }
         }
 
-        // --- UŽIVATELSKÉ ROZHRANÍ (UI PANEL) ---
+        // --- UŽIVATELSKÉ ROZHRANÍ (UI PANEL S VYSOKÝM ROZLIŠENÍM) ---
+        DrawRectangle(10, 10, 480, 320, { 25, 25, 30, 220 });
+        DrawRectangleLines(10, 10, 480, 320, { 100, 100, 110, 255 });
 
-        // Polotransparentní podklad pro dashboard
-        DrawRectangle(10, 10, 420, 240, { 25, 25, 30, 220 });
-        DrawRectangleLines(10, 10, 420, 240, { 100, 100, 110, 255 });
-
-        // Texty rozhraní
-        DrawText("PIKENYRSKY CTVEREC - PROTOTYP V1.0", 20, 20, 16, RAYWHITE);
-        DrawLine(20, 42, 400, 42, { 100, 100, 110, 255 });
+        // Titulek
+        DrawText("PIKENYRSKY CTVEREC - PROTOTYP V1.2", 20, 20, 20, RAYWHITE);
+        DrawText("Fyzikalne sjednocene veleni", 20, 44, 13, GOLD);
+        DrawLine(20, 62, 460, 62, { 100, 100, 110, 255 });
 
         // Stav formace
         std::string modeStr = (visualMode == VisualMode::ENGRAVING) ? "Rytina (Historicky)" : "Vektorovy (Takticky)";
-        DrawText(TextFormat("Vizuální styl [T]: %s", modeStr.c_str()), 20, 55, 14, LIGHTGRAY);
+        DrawText(TextFormat("Vizuální styl [T]: %s", modeStr.c_str()), 20, 75, 16, LIGHTGRAY);
 
         std::string pikesStr = (square.pikeState == PikeState::PORTE) ? "PORTE (Na rameno / Rychly)" : "CHARGE (K utoku / Pomaly)";
         Color stateColor = (square.pikeState == PikeState::PORTE) ? SKYBLUE : ORANGE;
-        DrawText(TextFormat("Stav pík [MEZERNIK]: %s", pikesStr.c_str()), 20, 80, 14, stateColor);
+        DrawText(TextFormat("Stav pík [MEZERNIK]: %s", pikesStr.c_str()), 20, 100, 16, stateColor);
+
+        // Dynamické vyobrazení tempa formace (NCO kontrola)
+        float tempoFactor = square.GetNcoTempoFactor();
+        Color tempoColor = GREEN;
+        if (tempoFactor < 0.90f) tempoColor = ORANGE;
+        if (tempoFactor < 0.50f) tempoColor = RED;
+        DrawText(TextFormat("Tempo formace (vliv NCO): %.0f %%", tempoFactor * 100.0f), 20, 125, 16, tempoColor);
 
         // Zobrazení indexu soudržnosti (Cohesion)
         float cohesion = square.GetCohesionIndex();
@@ -521,36 +739,36 @@ int main() {
         if (cohesion < 0.85f) cohesionColor = YELLOW;
         if (cohesion < 0.65f) cohesionColor = RED;
 
-        DrawText(TextFormat("Soudržnost čtverce: %.1f %%", cohesion * 100.0f), 20, 110, 14, RAYWHITE);
-        DrawRectangle(20, 130, 380, 15, { 50, 50, 60, 255 });
-        DrawRectangle(20, 130, (int)(380.0f * cohesion), 15, cohesionColor);
+        DrawText(TextFormat("Soudržnost čtverce: %.1f %%", cohesion * 100.0f), 20, 150, 16, RAYWHITE);
+        DrawRectangle(20, 175, 440, 18, { 50, 50, 60, 255 });
+        DrawRectangle(20, 175, (int)(440.0f * cohesion), 18, cohesionColor);
 
-        // Ovládací prvky a nápověda
-        DrawText("OVLÁDÁNÍ:", 20, 155, 12, GOLD);
-        DrawText("- [W, S]: Pohyb vpřed/vzad", 20, 175, 12, LIGHTGRAY);
-        DrawText("- [A, D]: Kolo (Rotace formace)", 20, 190, 12, LIGHTGRAY);
-        DrawText("- [Klik myši L]: Nastavit pochodový waypoint", 20, 205, 12, LIGHTGRAY);
-        DrawText("- [Klik myši R]: Zrušit waypoint", 20, 220, 12, LIGHTGRAY);
+        // Ovládací prvky a nápověda (přizpůsobeno pro zobrazení Shift+A,D)
+        DrawText("OVLÁDÁNÍ:", 20, 200, 14, GOLD);
+        DrawText("- [W, S]: Pohyb vpřed/vzad", 20, 218, 13, LIGHTGRAY);
+        DrawText("- [A, D]: Kolo (Rotace kolem př. LEVÉHO / PRAVÉHO rohu)", 20, 234, 13, LIGHTGRAY);
+        DrawText("- [Shift + A, D]: Obrat na místě o 90° (Změna čela čtverce)", 20, 250, 13, LIGHTGRAY);
+        DrawText("- [Klik myši L]: Waypoint (Pochod za středem 1. řady)", 20, 266, 13, LIGHTGRAY);
+        DrawText("- [Klik myši R]: Zrušit waypoint", 20, 282, 13, LIGHTGRAY);
+        DrawText("* NCO v rozích zpomalují rotaci, pokud nestíhají vnější poloměr!", 20, 301, 12, GOLD);
 
-        // Vykreslení malého legendy do pravého rohu dole
-        DrawRectangle(SCREEN_WIDTH - 220, SCREEN_HEIGHT - 130, 200, 110, { 25, 25, 30, 220 });
-        DrawRectangleLines(SCREEN_WIDTH - 220, SCREEN_HEIGHT - 130, 200, 110, { 100, 100, 110, 255 });
-        DrawText("LEGENDA JEDNOTEK:", SCREEN_WIDTH - 210, SCREEN_HEIGHT - 120, 11, GOLD);
+        // Vykreslení legendy do pravého rohu dole
+        DrawRectangle(SCREEN_WIDTH - 250, SCREEN_HEIGHT - 150, 230, 130, { 25, 25, 30, 220 });
+        DrawRectangleLines(SCREEN_WIDTH - 250, SCREEN_HEIGHT - 150, 230, 130, { 100, 100, 110, 255 });
+        DrawText("LEGENDA JEDNOTEK:", SCREEN_WIDTH - 240, SCREEN_HEIGHT - 140, 13, GOLD);
 
-        DrawCircle(SCREEN_WIDTH - 200, SCREEN_HEIGHT - 95, 6, { 180, 50, 40, 255 });
-        DrawText("Velitel (Kapitán)", SCREEN_WIDTH - 185, SCREEN_HEIGHT - 100, 11, RAYWHITE);
+        DrawCircle(SCREEN_WIDTH - 230, SCREEN_HEIGHT - 110, 7, { 180, 50, 40, 255 });
+        DrawText("Velitel (Kapitán vzadu)", SCREEN_WIDTH - 212, SCREEN_HEIGHT - 117, 13, RAYWHITE);
 
-        DrawCircle(SCREEN_WIDTH - 200, SCREEN_HEIGHT - 75, 6, { 190, 130, 40, 255 });
-        DrawText("Poddůstojník (NCO)", SCREEN_WIDTH - 185, SCREEN_HEIGHT - 80, 11, RAYWHITE);
+        DrawCircle(SCREEN_WIDTH - 230, SCREEN_HEIGHT - 85, 7, { 190, 130, 40, 255 });
+        DrawText("Poddůstojník (NCO na rozích)", SCREEN_WIDTH - 212, SCREEN_HEIGHT - 92, 13, RAYWHITE);
 
-        DrawCircle(SCREEN_WIDTH - 200, SCREEN_HEIGHT - 55, 6, { 120, 110, 100, 255 });
-        DrawText("Běžný pikenýr", SCREEN_WIDTH - 185, SCREEN_HEIGHT - 60, 11, RAYWHITE);
+        DrawCircle(SCREEN_WIDTH - 230, SCREEN_HEIGHT - 60, 7, { 120, 110, 100, 255 });
+        DrawText("Běžný pikenýr uvnitř", SCREEN_WIDTH - 212, SCREEN_HEIGHT - 67, 13, RAYWHITE);
 
         EndDrawing();
     }
 
-    // Vyčištění a zavření okna
     CloseWindow();
-
     return 0;
 }
