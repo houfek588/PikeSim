@@ -14,7 +14,11 @@
 #include "rendering/IRenderer.h"
 #include "rendering/EngravingRenderer.h"
 #include "rendering/VectorRenderer.h"
+#include "rendering/CameraController.h"
 #include "ui/UIManager.h"
+#include "ui/InputController.h"
+#include "core/SpatialHashGrid.h"
+#include "simulation/EnemyAIController.h"
 
 // --- TEST FRAMEWORK HARNESS ---
 static int g_testsPassed = 0;
@@ -554,6 +558,226 @@ void Test_F24_ModularCMakeConfiguration() {
     TEST_PASS();
 }
 
+// Feature 25: CameraController Transforms & Zoom Limits
+void Test_F25_CameraControllerTransforms() {
+    g_currentTestName = "Test_F25_CameraControllerTransforms";
+    CameraController cam({ 600.0f, 400.0f });
+    
+    // Zoom clamping
+    cam.SetZoom(0.1f);
+    EXPECT_NEAR(cam.GetZoom(), cam.GetMinZoom(), 0.001f);
+    cam.SetZoom(5.0f);
+    EXPECT_NEAR(cam.GetZoom(), cam.GetMaxZoom(), 0.001f);
+
+    // Coordinate transforms at zoom 1.0f
+    cam.SetZoom(1.0f);
+    Vector2 screenCenter = { SCREEN_WIDTH / 2.0f, SCREEN_HEIGHT / 2.0f };
+    Vector2 worldCenter = cam.ScreenToWorld(screenCenter);
+    EXPECT_NEAR(worldCenter.x, 600.0f, 0.01f);
+    EXPECT_NEAR(worldCenter.y, 400.0f, 0.01f);
+
+    Vector2 roundTrip = cam.WorldToScreen(worldCenter);
+    EXPECT_NEAR(roundTrip.x, screenCenter.x, 0.01f);
+    EXPECT_NEAR(roundTrip.y, screenCenter.y, 0.01f);
+
+    // Pan camera
+    cam.CenterOn({ 1000.0f, 800.0f });
+    EXPECT_NEAR(cam.GetTarget().x, 1000.0f, 0.01f);
+    EXPECT_NEAR(cam.GetTarget().y, 800.0f, 0.01f);
+
+    TEST_PASS();
+}
+
+// Feature 26: Formation Target Heading Order
+void Test_F26_FormationTargetHeadingOrder() {
+    g_currentTestName = "Test_F26_FormationTargetHeadingOrder";
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f);
+
+    // Initial heading is facing North (-PI/2)
+    EXPECT_NEAR(square.GetAngle(), -PI / 2.0f, 0.01f);
+
+    // Issue order to move to (500, 300) with final heading facing East (0.0 rad)
+    square.SetOrder({ 500.0f, 300.0f }, 0.0f, true);
+    EXPECT_TRUE(square.HasWaypoint());
+    EXPECT_TRUE(square.HasTargetHeading());
+    EXPECT_NEAR(square.GetTargetHeading(), 0.0f, 0.01f);
+
+    // Simulate navigation frames until destination reached and heading aligned (budget of 1000 frames @ 60 FPS)
+    for (int i = 0; i < 1000 && (square.HasWaypoint() || square.HasTargetHeading()); ++i) {
+        square.Update(0.016f);
+    }
+
+    // Formation should be near targetPos and aligned with 0.0 rad
+    EXPECT_FALSE(square.HasWaypoint());
+    EXPECT_FALSE(square.HasTargetHeading());
+    EXPECT_NEAR(square.GetAngle(), 0.0f, 0.05f);
+
+    TEST_PASS();
+}
+
+// Feature 27: InputController Drag Heading Calculation
+void Test_F27_InputControllerDragHeading() {
+    g_currentTestName = "Test_F27_InputControllerDragHeading";
+    
+    // Drag East (dx > 0, dy = 0) -> angle = 0 rad
+    float headingEast = InputController::CalculateHeadingFromVector({ 100.0f, 100.0f }, { 200.0f, 100.0f });
+    EXPECT_NEAR(headingEast, 0.0f, 0.001f);
+
+    // Drag South (dx = 0, dy > 0) -> angle = PI/2 rad
+    float headingSouth = InputController::CalculateHeadingFromVector({ 100.0f, 100.0f }, { 100.0f, 200.0f });
+    EXPECT_NEAR(headingSouth, PI / 2.0f, 0.001f);
+
+    // Drag North (dx = 0, dy < 0) -> angle = -PI/2 rad
+    float headingNorth = InputController::CalculateHeadingFromVector({ 100.0f, 100.0f }, { 100.0f, 0.0f });
+    EXPECT_NEAR(headingNorth, -PI / 2.0f, 0.001f);
+
+    // Drag West (dx < 0, dy = 0) -> angle = PI or -PI
+    float headingWest = InputController::CalculateHeadingFromVector({ 100.0f, 100.0f }, { 0.0f, 100.0f });
+    EXPECT_NEAR(fabsf(headingWest), PI, 0.001f);
+
+    TEST_PASS();
+}
+
+// Feature 28: SpatialHashGrid Insertion and Query
+void Test_F28_SpatialHashGridInsertionAndQuery() {
+    g_currentTestName = "Test_F28_SpatialHashGridInsertionAndQuery";
+    SpatialHashGrid grid(40.0f);
+    EXPECT_EQ(grid.GetEntryCount(), 0);
+
+    // Insert 3 agents: two near each other, one far
+    grid.Insert(1, 10, Faction::PLAYER, { 100.0f, 100.0f }, 15.0f);
+    grid.Insert(2, 10, Faction::PLAYER, { 115.0f, 100.0f }, 15.0f); // dist = 15
+    grid.Insert(3, 20, Faction::ENEMY, { 600.0f, 600.0f }, 15.0f);  // far away
+
+    EXPECT_EQ(grid.GetEntryCount(), 3);
+
+    // Query radius 20 around (100, 100)
+    int foundCount = 0;
+    AgentId foundId = 0;
+    grid.QueryRadius({ 100.0f, 100.0f }, 20.0f, [&](const GridAgentEntry& entry, float dist) {
+        foundCount++;
+        foundId = entry.agentId;
+        EXPECT_NEAR(dist, 15.0f, 0.01f);
+    });
+
+    EXPECT_EQ(foundCount, 1);
+    EXPECT_EQ(foundId, 2);
+
+    TEST_PASS();
+}
+
+// Feature 29: SpatialHashGrid Zero-Allocation Capacity and Clear
+void Test_F29_SpatialHashGridZeroAllocation() {
+    g_currentTestName = "Test_F29_SpatialHashGridZeroAllocation";
+    SpatialHashGrid grid(32.0f);
+
+    // Insert 500 agents across varied coordinates (including negative world coords)
+    for (int i = 0; i < 500; ++i) {
+        float x = -200.0f + static_cast<float>(i * 3);
+        float y = -150.0f + static_cast<float>(i * 2);
+        bool ok = grid.Insert(i, 1, Faction::PLAYER, { x, y }, 10.0f);
+        EXPECT_TRUE(ok);
+    }
+    EXPECT_EQ(grid.GetEntryCount(), 500);
+
+    // Clear grid
+    grid.Clear();
+    EXPECT_EQ(grid.GetEntryCount(), 0);
+
+    // Query on cleared grid yields 0
+    GridAgentEntry buffer[16];
+    int count = grid.QueryRadiusBuffer({ 0.0f, 0.0f }, 100.0f, buffer, 16);
+    EXPECT_EQ(count, 0);
+
+    TEST_PASS();
+}
+
+// Feature 30: Faction Assignment and Formation Initial Orientation
+void Test_F30_FactionAssignmentAndProperties() {
+    g_currentTestName = "Test_F30_FactionAssignmentAndProperties";
+    PikeSquare playerSquare(600.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    PikeSquare enemySquare(600.0f, 200.0f, 10, 10, 26.0f, Faction::ENEMY, PI / 2.0f);
+
+    EXPECT_TRUE(playerSquare.GetFaction() == Faction::PLAYER);
+    EXPECT_TRUE(enemySquare.GetFaction() == Faction::ENEMY);
+
+    EXPECT_NEAR(playerSquare.GetAngle(), -PI / 2.0f, 0.01f);
+    EXPECT_NEAR(enemySquare.GetAngle(), PI / 2.0f, 0.01f);
+
+    // Check soldiers have matching faction
+    EXPECT_TRUE(playerSquare.GetSoldiers()[0].faction == Faction::PLAYER);
+    EXPECT_TRUE(enemySquare.GetSoldiers()[0].faction == Faction::ENEMY);
+
+    TEST_PASS();
+}
+
+// Feature 31: Inter-Formation Agent Repulsion via SpatialHashGrid
+void Test_F31_InterFormationAgentRepulsion() {
+    g_currentTestName = "Test_F31_InterFormationAgentRepulsion";
+    SpatialHashGrid grid(40.0f);
+
+    // Player facing North (-PI/2), front at y ≈ 500 - 117 = 383
+    PikeSquare playerSquare(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    playerSquare.SetFormationId(1);
+
+    // Enemy facing South (PI/2), front at y ≈ 250 + 117 = 367
+    // Lines in close contact (383 vs 367 -> dist = 16px < personalRadius 19.5px)
+    PikeSquare enemySquare(500.0f, 250.0f, 10, 10, 26.0f, Faction::ENEMY, PI / 2.0f);
+    enemySquare.SetFormationId(2);
+
+    // Register all agents into grid
+    grid.Clear();
+    for (const auto& a : playerSquare.GetSoldiers()) {
+        grid.Insert(a.id, playerSquare.GetFormationId(), a.faction, a.position, 19.5f);
+    }
+    for (const auto& a : enemySquare.GetSoldiers()) {
+        grid.Insert(a.id, enemySquare.GetFormationId(), a.faction, a.position, 19.5f);
+    }
+
+    // Step physics with grid
+    playerSquare.Update(0.016f, &grid);
+
+    // Front soldiers of player square should receive repelling impulse pushed South (dy > 0)
+    // Front row of player is row 0: soldiers 0..9
+    float totalFrontYVel = 0.0f;
+    for (int col = 0; col < 10; ++col) {
+        totalFrontYVel += playerSquare.GetSoldiers()[col].velocity.y;
+    }
+    // Repulsion pushes south away from enemy in contact
+    EXPECT_TRUE(totalFrontYVel > 0.0f);
+
+    TEST_PASS();
+}
+
+// Feature 32: Enemy AI Controller States & Posture
+void Test_F32_EnemyAIControllerStates() {
+    g_currentTestName = "Test_F32_EnemyAIControllerStates";
+    PikeSquare playerSquare(500.0f, 700.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    PikeSquare enemySquare(500.0f, 100.0f, 10, 10, 26.0f, Faction::ENEMY, PI / 2.0f);
+    EnemyAIController ai(enemySquare);
+
+    // Distance is 600 > 250 -> ADVANCE state, PORTE posture
+    ai.Update(0.016f, playerSquare);
+    EXPECT_TRUE(ai.GetState() == EnemyAIState::ADVANCE);
+    EXPECT_TRUE(enemySquare.pikeState == PikeState::PORTE);
+    EXPECT_TRUE(enemySquare.HasWaypoint());
+
+    // Reposition enemy close to player (dist = 150 <= 250)
+    enemySquare.position = { 500.0f, 550.0f };
+    ai.Update(0.016f, playerSquare);
+    EXPECT_TRUE(ai.GetState() == EnemyAIState::ENGAGE);
+    EXPECT_TRUE(enemySquare.pikeState == PikeState::CHARGE);
+
+    // Toggle active off -> IDLE, waypoint cleared
+    ai.ToggleActive();
+    EXPECT_FALSE(ai.IsActive());
+    ai.Update(0.016f, playerSquare);
+    EXPECT_TRUE(ai.GetState() == EnemyAIState::IDLE);
+    EXPECT_FALSE(enemySquare.HasWaypoint());
+
+    TEST_PASS();
+}
+
 // ============================================================================
 // TIER 2: BOUNDARY & CORNER CASES
 // ============================================================================
@@ -909,6 +1133,14 @@ int main() {
     Test_F22_UIManagerInterface();
     Test_F23_StreamlinedMainStructure();
     Test_F24_ModularCMakeConfiguration();
+    Test_F25_CameraControllerTransforms();
+    Test_F26_FormationTargetHeadingOrder();
+    Test_F27_InputControllerDragHeading();
+    Test_F28_SpatialHashGridInsertionAndQuery();
+    Test_F29_SpatialHashGridZeroAllocation();
+    Test_F30_FactionAssignmentAndProperties();
+    Test_F31_InterFormationAgentRepulsion();
+    Test_F32_EnemyAIControllerStates();
 
     std::cout << "\n--- TIER 2: BOUNDARY & CORNER CASES ---\n";
     Test_T2_ZeroLengthVector();

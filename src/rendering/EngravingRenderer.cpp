@@ -27,12 +27,12 @@ void EngravingRenderer::DrawWaypoint(Vector2 targetPos, Vector2 frontCenter) {
 }
 
 void EngravingRenderer::DrawAgent(const Agent& agent, float spacing, PikeState state) {
-    Color plumeColor = m_inkLight;
+    Color plumeColor = (agent.faction == Faction::PLAYER) ? Color{ 70, 110, 170, 255 } : Color{ 170, 60, 50, 255 };
 
     if (agent.role == Role::LEADER) {
-        plumeColor = { 180, 50, 40, 255 }; // Výrazné červené pero velitele
+        plumeColor = (agent.faction == Faction::PLAYER) ? Color{ 40, 140, 230, 255 } : Color{ 210, 30, 20, 255 }; // Pero velitele
     } else if (agent.role == Role::NCO) {
-        plumeColor = { 190, 130, 40, 255 }; // Oranžové pero poddůstojníka
+        plumeColor = (agent.faction == Faction::PLAYER) ? Color{ 210, 160, 40, 255 } : Color{ 210, 90, 30, 255 }; // Pero poddůstojníka
     }
 
     Vector2 pos = agent.position;

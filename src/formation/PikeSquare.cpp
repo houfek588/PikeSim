@@ -1,14 +1,19 @@
 #include "formation/PikeSquare.h"
 #include "core/MathUtils.h"
+#include "core/SpatialHashGrid.h"
 #include <cmath>
 #include <iostream>
 
-PikeSquare::PikeSquare(float x, float y, int c, int r, float space)
-    : position{ x, y }
-    , angle{ -PI / 2.0f }
-    , targetAngle{ -PI / 2.0f }
+PikeSquare::PikeSquare(float x, float y, int c, int r, float space, Faction fac, float initAngle)
+    : formationId{ 0 }
+    , faction{ fac }
+    , position{ x, y }
+    , angle{ MathUtils::NormalizeAngle(initAngle) }
+    , targetAngle{ MathUtils::NormalizeAngle(initAngle) }
     , targetPos{ x, y }
     , hasWaypoint{ false }
+    , hasTargetHeading{ false }
+    , targetHeading{ MathUtils::NormalizeAngle(initAngle) }
     , cols{ c }
     , rows{ r }
     , spacing{ space }
@@ -24,6 +29,7 @@ PikeSquare::PikeSquare(float x, float y, int c, int r, float space)
             Agent agent;
             agent.id = idCounter++;
             agent.role = Role::PIKEMAN;
+            agent.faction = faction;
             agent.mass = 1.0f;
             agent.maxForce = 180.0f;
             agent.position = position;
@@ -40,6 +46,7 @@ PikeSquare::PikeSquare(float x, float y, int c, int r, float space)
         Agent agent;
         agent.id = idCounter++;
         agent.role = Role::NCO;
+        agent.faction = faction;
         agent.mass = 1.0f;
         agent.maxForce = 180.0f;
         agent.position = position;
@@ -55,6 +62,7 @@ PikeSquare::PikeSquare(float x, float y, int c, int r, float space)
         Agent agent;
         agent.id = idCounter++;
         agent.role = Role::LEADER;
+        agent.faction = faction;
         agent.mass = 1.0f;
         agent.maxForce = 180.0f;
         agent.position = position;
@@ -178,6 +186,7 @@ float PikeSquare::GetCohesionIndex() const {
 void PikeSquare::Move(Vector2 dir, float dt, float speed) {
     if (Vector2Length(dir) > 0.01f) {
         hasWaypoint = false;
+        hasTargetHeading = false;
         Vector2 normalizedDir = MathUtils::SafeNormalize(dir);
         position = Vector2Add(position, Vector2Scale(normalizedDir, speed * dt));
     }
@@ -185,6 +194,7 @@ void PikeSquare::Move(Vector2 dir, float dt, float speed) {
 
 void PikeSquare::Wheel(float dAngle, bool turnRight, float /*dt*/) {
     hasWaypoint = false;
+    hasTargetHeading = false;
     float colOffset = (cols - 1) / 2.0f;
     float rowOffset = (rows - 1) / 2.0f;
     Vector2 localPivot = turnRight
@@ -195,6 +205,7 @@ void PikeSquare::Wheel(float dAngle, bool turnRight, float /*dt*/) {
 
 void PikeSquare::InPlaceTurn90(bool clockwise) {
     hasWaypoint = false;
+    hasTargetHeading = false;
 
     if (!clockwise) {
         // Otáčení CCW (doleva) o 90 stupňů kolem geometrického středu
@@ -257,13 +268,22 @@ void PikeSquare::InPlaceTurn90(bool clockwise) {
 void PikeSquare::SetWaypoint(Vector2 point) {
     targetPos = point;
     hasWaypoint = true;
+    hasTargetHeading = false;
+}
+
+void PikeSquare::SetOrder(Vector2 point, float finalHeading, bool withHeading) {
+    targetPos = point;
+    hasWaypoint = true;
+    hasTargetHeading = withHeading;
+    targetHeading = MathUtils::NormalizeAngle(finalHeading);
 }
 
 void PikeSquare::ClearWaypoint() {
     hasWaypoint = false;
+    hasTargetHeading = false;
 }
 
-void PikeSquare::Update(float dt) {
+void PikeSquare::Update(float dt, const SpatialHashGrid* grid) {
     float tempoFactor = GetNcoTempoFactor();
 
     // 1. Řízení pohybu (rychlost ovlivněná tempoFactorem)
@@ -276,39 +296,42 @@ void PikeSquare::Update(float dt) {
 
     Vector2 moveDir = { 0.0f, 0.0f };
 
-    bool manualInput = IsKeyDown(KEY_W) || IsKeyDown(KEY_S) || IsKeyDown(KEY_A) || IsKeyDown(KEY_D);
+    bool manualInput = (faction == Faction::PLAYER) && (IsKeyDown(KEY_W) || IsKeyDown(KEY_S) || IsKeyDown(KEY_A) || IsKeyDown(KEY_D));
     if (manualInput) {
         hasWaypoint = false;
+        hasTargetHeading = false;
     }
 
-    if (IsKeyDown(KEY_W)) {
-        moveDir.x += cosf(angle);
-        moveDir.y += sinf(angle);
-    }
-    if (IsKeyDown(KEY_S)) {
-        moveDir.x -= cosf(angle);
-        moveDir.y -= sinf(angle);
-    }
+    if (faction == Faction::PLAYER) {
+        if (IsKeyDown(KEY_W)) {
+            moveDir.x += cosf(angle);
+            moveDir.y += sinf(angle);
+        }
+        if (IsKeyDown(KEY_S)) {
+            moveDir.x -= cosf(angle);
+            moveDir.y -= sinf(angle);
+        }
 
-    bool shiftPressed = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+        bool shiftPressed = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
 
-    if (shiftPressed) {
-        if (IsKeyPressed(KEY_A)) {
-            InPlaceTurn90(false);
-        }
-        if (IsKeyPressed(KEY_D)) {
-            InPlaceTurn90(true);
-        }
-    } else {
-        if (IsKeyDown(KEY_A)) {
-            float dAngle = -rotationSpeed * dt;
-            Vector2 localPivot = { -colOffset * spacing, -rowOffset * spacing };
-            RotateAroundLocalPoint(dAngle, localPivot);
-        }
-        if (IsKeyDown(KEY_D)) {
-            float dAngle = rotationSpeed * dt;
-            Vector2 localPivot = { colOffset * spacing, -rowOffset * spacing };
-            RotateAroundLocalPoint(dAngle, localPivot);
+        if (shiftPressed) {
+            if (IsKeyPressed(KEY_A)) {
+                InPlaceTurn90(false);
+            }
+            if (IsKeyPressed(KEY_D)) {
+                InPlaceTurn90(true);
+            }
+        } else {
+            if (IsKeyDown(KEY_A)) {
+                float dAngle = -rotationSpeed * dt;
+                Vector2 localPivot = { -colOffset * spacing, -rowOffset * spacing };
+                RotateAroundLocalPoint(dAngle, localPivot);
+            }
+            if (IsKeyDown(KEY_D)) {
+                float dAngle = rotationSpeed * dt;
+                Vector2 localPivot = { colOffset * spacing, -rowOffset * spacing };
+                RotateAroundLocalPoint(dAngle, localPivot);
+            }
         }
     }
 
@@ -353,6 +376,18 @@ void PikeSquare::Update(float dt) {
         }
     }
 
+    if (hasTargetHeading && !hasWaypoint) {
+        // Fáze 3: Srovnání čela do cílového úhlu (targetHeading) kolem středu formace
+        float angleDiff = MathUtils::NormalizeAngle(targetHeading - angle);
+        if (fabsf(angleDiff) > 0.03f) {
+            float maxRotation = rotationSpeed * dt;
+            float dAngle = (angleDiff > 0.0f) ? fminf(maxRotation, angleDiff) : fmaxf(-maxRotation, angleDiff);
+            RotateAroundLocalPoint(dAngle, { 0.0f, 0.0f });
+        } else {
+            hasTargetHeading = false;
+        }
+    }
+
     // Translační pohyb formace
     if (Vector2Length(moveDir) > 0.01f) {
         Vector2 normalizedMove = MathUtils::SafeNormalize(moveDir);
@@ -378,14 +413,28 @@ void PikeSquare::Update(float dt) {
         Vector2 separationForce = { 0.0f, 0.0f };
         float personalRadius = spacing * 0.75f;
 
-        for (const auto& other : soldiers) {
-            if (agent.id == other.id) continue;
-            Vector2 toAgent = Vector2Subtract(agent.position, other.position);
-            float dist = Vector2Length(toAgent);
-            if (dist < personalRadius && dist > 0.01f) {
+        if (grid) {
+            // O(N) Spatial Query napříč všemi registrovanými formacemi
+            grid->QueryRadius(agent.position, personalRadius, [&](const GridAgentEntry& neighbor, float dist) {
+                if (neighbor.agentId == agent.id && neighbor.formationId == formationId) return;
+
                 float push = (personalRadius - dist) / personalRadius;
-                float factor = 300.0f;
+                // Zvýšený odpor linie při střetu s nepřítelem (400 vs 300)
+                float factor = (neighbor.faction != faction) ? 400.0f : 300.0f;
+                Vector2 toAgent = Vector2Subtract(agent.position, neighbor.position);
                 separationForce = Vector2Add(separationForce, Vector2Scale(MathUtils::SafeNormalize(toAgent), push * factor));
+            });
+        } else {
+            // Původní fallback pro samostatný izolovaný čtverec
+            for (const auto& other : soldiers) {
+                if (agent.id == other.id) continue;
+                Vector2 toAgent = Vector2Subtract(agent.position, other.position);
+                float dist = Vector2Length(toAgent);
+                if (dist < personalRadius && dist > 0.01f) {
+                    float push = (personalRadius - dist) / personalRadius;
+                    float factor = 300.0f;
+                    separationForce = Vector2Add(separationForce, Vector2Scale(MathUtils::SafeNormalize(toAgent), push * factor));
+                }
             }
         }
 

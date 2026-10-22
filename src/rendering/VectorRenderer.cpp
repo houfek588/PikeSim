@@ -17,11 +17,11 @@ void VectorRenderer::DrawWaypoint(Vector2 targetPos, Vector2 frontCenter) {
 }
 
 void VectorRenderer::DrawAgent(const Agent& agent, float spacing, PikeState state) {
-    Color coreColor = { 0, 200, 255, 255 };
+    Color coreColor = (agent.faction == Faction::PLAYER) ? Color{ 0, 200, 255, 255 } : Color{ 230, 50, 50, 255 };
     if (agent.role == Role::LEADER) {
-        coreColor = { 255, 50, 50, 255 };
+        coreColor = (agent.faction == Faction::PLAYER) ? Color{ 255, 255, 255, 255 } : Color{ 255, 20, 20, 255 };
     } else if (agent.role == Role::NCO) {
-        coreColor = { 255, 180, 0, 255 };
+        coreColor = (agent.faction == Faction::PLAYER) ? Color{ 255, 180, 0, 255 } : Color{ 255, 120, 0, 255 };
     }
 
     Vector2 pos = agent.position;
@@ -41,7 +41,7 @@ void VectorRenderer::DrawAgent(const Agent& agent, float spacing, PikeState stat
     Vector2 weaponEnd = Vector2Add(pos, Vector2Scale(pikeDir, pikeLength));
 
     float speed = Vector2Length(agent.velocity);
-    Color pikeColor = { 150, 230, 150, 180 };
+    Color pikeColor = (agent.faction == Faction::PLAYER) ? Color{ 150, 230, 150, 180 } : Color{ 255, 180, 120, 180 };
     if (speed > 40.0f) {
         pikeColor = { 255, 230, 100, 200 };
     }

@@ -25,6 +25,12 @@ enum class VisualMode {
     VECTOR      // Minimalistický taktický vektorový režim
 };
 
+// --- STRANY NA BOJIŠTI (FRAKCE) ---
+enum class Faction {
+    PLAYER,     // Modří (hráč)
+    ENEMY       // Červení (protivník)
+};
+
 // --- IDENTIFIKÁTORY ---
 using AgentId = int;
 using FormationId = int;

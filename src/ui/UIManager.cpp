@@ -1,13 +1,13 @@
 #include "ui/UIManager.h"
 #include <string>
 
-void UIManager::DrawHUD(const PikeSquare& square, VisualMode currentMode) {
-    DrawRectangle(10, 10, 480, 320, { 25, 25, 30, 220 });
-    DrawRectangleLines(10, 10, 480, 320, { 100, 100, 110, 255 });
+void UIManager::DrawHUD(const PikeSquare& square, VisualMode currentMode, bool aiActive) {
+    DrawRectangle(10, 10, 480, 340, { 25, 25, 30, 220 });
+    DrawRectangleLines(10, 10, 480, 340, { 100, 100, 110, 255 });
 
     // Titulek
-    DrawText("PIKENYRSKY CTVEREC - PROTOTYP V1.2", 20, 20, 20, RAYWHITE);
-    DrawText("Fyzikalne sjednocene veleni", 20, 44, 13, GOLD);
+    DrawText("PIKENYRSKY CTVEREC - 1v1 SANDBOX", 20, 20, 20, RAYWHITE);
+    DrawText("Fyzikalne sjednocene veleni & O(N) Spatial Grid", 20, 44, 13, GOLD);
     DrawLine(20, 62, 460, 62, { 100, 100, 110, 255 });
 
     // Stav formace
@@ -18,12 +18,17 @@ void UIManager::DrawHUD(const PikeSquare& square, VisualMode currentMode) {
     Color stateColor = (square.pikeState == PikeState::PORTE) ? SKYBLUE : ORANGE;
     DrawText(TextFormat("Stav pík [MEZERNIK]: %s", pikesStr.c_str()), 20, 100, 16, stateColor);
 
+    // Stav oponenta AI
+    const char* aiStr = aiActive ? "AKTIVNÍ (pochod k hráči)" : "STATICKÝ (sandbox)";
+    Color aiColor = aiActive ? Color{ 255, 100, 100, 255 } : LIGHTGRAY;
+    DrawText(TextFormat("Oponent AI [P]: %s", aiStr), 20, 125, 16, aiColor);
+
     // Dynamické vyobrazení tempa formace (NCO kontrola)
     float tempoFactor = square.GetNcoTempoFactor();
     Color tempoColor = GREEN;
     if (tempoFactor < 0.90f) tempoColor = ORANGE;
     if (tempoFactor < 0.50f) tempoColor = RED;
-    DrawText(TextFormat("Tempo formace (vliv NCO): %.0f %%", tempoFactor * 100.0f), 20, 125, 16, tempoColor);
+    DrawText(TextFormat("Tempo formace (vliv NCO): %.0f %%", tempoFactor * 100.0f), 20, 150, 16, tempoColor);
 
     // Zobrazení indexu soudržnosti (Cohesion)
     float cohesion = square.GetCohesionIndex();
@@ -31,18 +36,18 @@ void UIManager::DrawHUD(const PikeSquare& square, VisualMode currentMode) {
     if (cohesion < 0.85f) cohesionColor = YELLOW;
     if (cohesion < 0.65f) cohesionColor = RED;
 
-    DrawText(TextFormat("Soudržnost čtverce: %.1f %%", cohesion * 100.0f), 20, 150, 16, RAYWHITE);
-    DrawRectangle(20, 175, 440, 18, { 50, 50, 60, 255 });
-    DrawRectangle(20, 175, static_cast<int>(440.0f * cohesion), 18, cohesionColor);
+    DrawText(TextFormat("Soudržnost čtverce: %.1f %%", cohesion * 100.0f), 20, 175, 16, RAYWHITE);
+    DrawRectangle(20, 197, 440, 16, { 50, 50, 60, 255 });
+    DrawRectangle(20, 197, static_cast<int>(440.0f * cohesion), 16, cohesionColor);
 
     // Ovládací prvky a nápověda
-    DrawText("OVLÁDÁNÍ:", 20, 200, 14, GOLD);
-    DrawText("- [W, S]: Pohyb vpřed/vzad", 20, 218, 13, LIGHTGRAY);
-    DrawText("- [A, D]: Kolo (Rotace kolem př. LEVÉHO / PRAVÉHO rohu)", 20, 234, 13, LIGHTGRAY);
-    DrawText("- [Shift + A, D]: Obrat na místě o 90° (Změna čela čtverce)", 20, 250, 13, LIGHTGRAY);
-    DrawText("- [Klik myši L]: Waypoint (Pochod za středem 1. řady)", 20, 266, 13, LIGHTGRAY);
-    DrawText("- [Klik myši R]: Zrušit waypoint", 20, 282, 13, LIGHTGRAY);
-    DrawText("* NCO v rozích zpomalují rotaci, pokud nestíhají vnější poloměr!", 20, 301, 12, GOLD);
+    DrawText("OVLÁDÁNÍ:", 20, 220, 14, GOLD);
+    DrawText("- [LMB]: Výběr formace | [RMB tažení]: Total War směrování", 20, 237, 13, LIGHTGRAY);
+    DrawText("- [P]: Přepnutí AI oponenta (Aktivní útok / Statický terč)", 20, 253, 13, LIGHTGRAY);
+    DrawText("- [W, A, S, D / MMB tažení]: Pohyb kamery | [Kolečko]: Zoom", 20, 269, 13, LIGHTGRAY);
+    DrawText("- [Shift + A, D]: Okamžitý maticový obrat o 90°", 20, 285, 13, LIGHTGRAY);
+    DrawText("* NCO v rozích zpomalují rotaci, pokud nestíhají tempo!", 20, 303, 12, GOLD);
+    DrawText("* Linie formací se při kontaktu fyzicky odpuzují!", 20, 319, 12, SKYBLUE);
 }
 
 void UIManager::DrawLegend() {
@@ -60,7 +65,7 @@ void UIManager::DrawLegend() {
     DrawText("Běžný pikenýr uvnitř", SCREEN_WIDTH - 212, SCREEN_HEIGHT - 67, 13, RAYWHITE);
 }
 
-void UIManager::DrawUI(const PikeSquare& square, VisualMode currentMode) {
-    DrawHUD(square, currentMode);
+void UIManager::DrawUI(const PikeSquare& square, VisualMode currentMode, bool aiActive) {
+    DrawHUD(square, currentMode, aiActive);
     DrawLegend();
 }

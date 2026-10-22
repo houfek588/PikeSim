@@ -35,21 +35,29 @@ FetchContent_MakeAvailable(raylib)
 set(SOURCES
     src/main.cpp
     src/core/MathUtils.cpp
+    src/core/SpatialHashGrid.cpp
+    src/simulation/EnemyAIController.cpp
     src/formation/PikeSquare.cpp
     src/rendering/EngravingRenderer.cpp
     src/rendering/VectorRenderer.cpp
+    src/rendering/CameraController.cpp
     src/ui/UIManager.cpp
+    src/ui/InputController.cpp
 )
 
 set(HEADERS
     include/core/Types.h
     include/core/MathUtils.h
+    include/core/SpatialHashGrid.h
     include/simulation/Agent.h
+    include/simulation/EnemyAIController.h
     include/formation/PikeSquare.h
     include/rendering/IRenderer.h
     include/rendering/EngravingRenderer.h
     include/rendering/VectorRenderer.h
+    include/rendering/CameraController.h
     include/ui/UIManager.h
+    include/ui/InputController.h
 )
 
 # --- DEFINICE EXECUTABLE ---
@@ -82,10 +90,14 @@ endif()
 set(TEST_SOURCES
     tests/test_runner.cpp
     src/core/MathUtils.cpp
+    src/core/SpatialHashGrid.cpp
+    src/simulation/EnemyAIController.cpp
     src/formation/PikeSquare.cpp
     src/rendering/EngravingRenderer.cpp
     src/rendering/VectorRenderer.cpp
+    src/rendering/CameraController.cpp
     src/ui/UIManager.cpp
+    src/ui/InputController.cpp
 )
 
 add_executable(PikeSimTests ${TEST_SOURCES} ${HEADERS})

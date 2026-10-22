@@ -5,14 +5,20 @@
 #include "simulation/Agent.h"
 #include <vector>
 
+class SpatialHashGrid;
+
 // --- TŘÍDA PRO PIKENÝRSKÝ ČTVEREC ---
 class PikeSquare {
 public:
+    FormationId formationId{ 0 };
+    Faction faction{ Faction::PLAYER };
     Vector2 position;       // Střed formace (pivot)
     float angle;            // Úhel rotace formace (v radiánech)
     float targetAngle;      // Cílový úhel rotace
     Vector2 targetPos;      // Cílová pozice (waypoint)
     bool hasWaypoint;       // Příznak aktivního waypointu
+    bool hasTargetHeading;  // Příznak aktivního finálního srovnání čela
+    float targetHeading;    // Cílové finální natočení čela (v radiánech)
 
     int cols;               // Počet sloupců (default 10)
     int rows;               // Počet řad (default 10)
@@ -21,7 +27,7 @@ public:
     std::vector<Agent> soldiers; // Souvislé pole všech vojáků (105 celkem)
 
     // Konstruktor: inicializuje 10x10 pikenýrů + 4 NCO + 1 velitel
-    PikeSquare(float x, float y, int c = 10, int r = 10, float space = 26.0f);
+    PikeSquare(float x, float y, int c = 10, int r = 10, float space = 26.0f, Faction fac = Faction::PLAYER, float initAngle = -PI / 2.0f);
 
     // Geometrické výpočty
     Vector2 GetFrontCenter() const;
@@ -37,18 +43,25 @@ public:
     void Wheel(float dAngle, bool turnRight, float dt);
     void InPlaceTurn90(bool clockwise);
     void SetWaypoint(Vector2 point);
+    void SetOrder(Vector2 point, float finalHeading, bool withHeading = true);
     void ClearWaypoint();
 
     // Hlavní simulační tick
-    void Update(float dt);
+    void Update(float dt, const SpatialHashGrid* grid = nullptr);
 
     // Přístupové metody
+    Faction GetFaction() const { return faction; }
+    void SetFaction(Faction f) { faction = f; }
+    FormationId GetFormationId() const { return formationId; }
+    void SetFormationId(FormationId id) { formationId = id; }
     const std::vector<Agent>& GetSoldiers() const { return soldiers; }
     std::vector<Agent>& GetSoldiers() { return soldiers; }
     Vector2 GetPosition() const { return position; }
     float GetAngle() const { return angle; }
     PikeState GetState() const { return pikeState; }
     bool HasWaypoint() const { return hasWaypoint; }
+    bool HasTargetHeading() const { return hasTargetHeading; }
+    float GetTargetHeading() const { return targetHeading; }
     Vector2 GetWaypoint() const { return targetPos; }
     float GetSpacing() const { return spacing; }
     int GetCols() const { return cols; }
