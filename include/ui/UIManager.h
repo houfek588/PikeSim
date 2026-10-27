@@ -13,6 +13,9 @@ public:
     // Vykreslí hlavní informační panel vlevo nahoře
     static void DrawHUD(const PikeSquare& square, VisualMode currentMode, bool aiActive = true);
 
+    // Vykreslí spodní lištu formací (Total War styl miniatur jednotek)
+    static void DrawFormationBar(const std::vector<PikeSquare>& formations, int selectedIndex);
+
     // Vykreslí legendu jednotek vpravo dole
     static void DrawLegend();
 };

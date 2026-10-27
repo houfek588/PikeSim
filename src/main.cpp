@@ -8,18 +8,26 @@
 #include "rendering/CameraController.h"
 #include "ui/InputController.h"
 #include "ui/UIManager.h"
+#include "ui/FormationCard.h"
+#include <vector>
 
 int main() {
-    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Pike Square Simulator - 1v1 Sandbox (Milestone 3.2)");
+    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Pike Square Simulator - Tactical Formations (Milestone 3.3)");
     SetTargetFPS(60);
 
-    PikeSquare playerSquare(SCREEN_WIDTH / 2.0f, SCREEN_HEIGHT / 2.0f + 100.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
-    playerSquare.SetFormationId(1);
+    std::vector<PikeSquare> playerFormations;
+    playerFormations.emplace_back(SCREEN_WIDTH / 2.0f, SCREEN_HEIGHT / 2.0f + 100.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    playerFormations[0].SetFormationId(1);
+    playerFormations[0].SetName("1. Praporec");
+    int selectedPlayerIdx = 0;
+
     PikeSquare enemySquare(SCREEN_WIDTH / 2.0f, SCREEN_HEIGHT / 2.0f - 250.0f, 10, 10, 26.0f, Faction::ENEMY, PI / 2.0f);
     enemySquare.SetFormationId(2);
+    enemySquare.SetName("Oponent");
 
     SpatialHashGrid spatialGrid(40.0f);
     EnemyAIController enemyAI(enemySquare);
+    FormationCard formationCard;
 
     VisualMode visualMode = VisualMode::ENGRAVING;
     EngravingRenderer engravingRenderer;
@@ -27,49 +35,63 @@ int main() {
     CameraController cameraController({ SCREEN_WIDTH / 2.0f, SCREEN_HEIGHT / 2.0f });
     InputController inputController;
 
+    auto registerFormation = [&](const PikeSquare& sq) {
+        float sp = sq.GetSpacing() * 0.75f, pikeLen = sq.GetSpacing() * 3.2f;
+        for (const auto& a : sq.GetSoldiers()) {
+            if (a.isAlive) {
+                spatialGrid.Insert(a.id, sq.GetFormationId(), a.faction, a.position, sp, a.pressureForce);
+                if (sq.GetState() == PikeState::CHARGE && a.weapon == WeaponType::PIKE && !a.isPikeBroken) {
+                    Vector2 tip = Vector2Add(a.position, Vector2Scale({ cosf(a.pikeAngle), sinf(a.pikeAngle) }, pikeLen));
+                    spatialGrid.InsertPike(a.id, sq.GetFormationId(), a.faction, a.position, tip);
+                }
+            }
+        }
+    };
+
     while (!WindowShouldClose()) {
         float dt = fminf(GetFrameTime(), 0.1f);
 
         if (IsKeyPressed(KEY_T)) visualMode = (visualMode == VisualMode::ENGRAVING) ? VisualMode::VECTOR : VisualMode::ENGRAVING;
         if (IsKeyPressed(KEY_P)) enemyAI.ToggleActive();
-        if (IsKeyPressed(KEY_SPACE) && inputController.IsSelected()) {
-            playerSquare.pikeState = (playerSquare.pikeState == PikeState::PORTE) ? PikeState::CHARGE : PikeState::PORTE;
+        if (IsKeyPressed(KEY_SPACE) && inputController.IsSelected() && !playerFormations.empty()) {
+            PikeState cur = playerFormations[selectedPlayerIdx].pikeState;
+            playerFormations[selectedPlayerIdx].pikeState = (cur == PikeState::PORTE) ? PikeState::CHARGE : PikeState::PORTE;
         }
 
         cameraController.Update(dt);
-        inputController.Update(cameraController, playerSquare);
-
+        formationCard.Update(playerFormations);
+        inputController.UpdateMulti(cameraController, playerFormations, selectedPlayerIdx, formationCard);
         spatialGrid.Clear();
-        for (const auto& a : playerSquare.GetSoldiers()) {
-            spatialGrid.Insert(a.id, playerSquare.GetFormationId(), a.faction, a.position, playerSquare.GetSpacing() * 0.75f);
-        }
-        for (const auto& a : enemySquare.GetSoldiers()) {
-            spatialGrid.Insert(a.id, enemySquare.GetFormationId(), a.faction, a.position, enemySquare.GetSpacing() * 0.75f);
-        }
+        for (const auto& sq : playerFormations) registerFormation(sq);
+        registerFormation(enemySquare);
 
-        enemyAI.Update(dt, playerSquare);
-        playerSquare.Update(dt, &spatialGrid);
+        if (!playerFormations.empty()) enemyAI.Update(dt, playerFormations[0]);
+        for (auto& sq : playerFormations) sq.Update(dt, &spatialGrid);
         enemySquare.Update(dt, &spatialGrid);
 
         BeginDrawing();
         ClearBackground(RAYWHITE);
         BeginMode2D(cameraController.GetCamera());
-
-        IRenderer* renderer = (visualMode == VisualMode::ENGRAVING)
-            ? static_cast<IRenderer*>(&engravingRenderer) : static_cast<IRenderer*>(&vectorRenderer);
-        renderer->DrawBackground();
-        renderer->DrawFormation(playerSquare);
-        renderer->DrawFormation(enemySquare);
-
-        if (playerSquare.HasWaypoint()) renderer->DrawWaypoint(playerSquare.GetWaypoint(), playerSquare.GetFrontCenter());
-        if (enemySquare.HasWaypoint() && !enemyAI.IsActive()) renderer->DrawWaypoint(enemySquare.GetWaypoint(), enemySquare.GetFrontCenter());
-        inputController.DrawWorldOverlays(playerSquare);
-
+        IRenderer* r = (visualMode == VisualMode::ENGRAVING) ? static_cast<IRenderer*>(&engravingRenderer) : static_cast<IRenderer*>(&vectorRenderer);
+        r->DrawBackground();
+        for (const auto& sq : playerFormations) {
+            r->DrawFormation(sq);
+            if (sq.HasWaypoint()) r->DrawWaypoint(sq.GetWaypoint(), sq.GetFrontCenter());
+        }
+        r->DrawFormation(enemySquare);
+        if (enemySquare.HasWaypoint() && !enemyAI.IsActive()) r->DrawWaypoint(enemySquare.GetWaypoint(), enemySquare.GetFrontCenter());
+        if (inputController.IsSelected() && selectedPlayerIdx < static_cast<int>(playerFormations.size())) {
+            inputController.DrawWorldOverlays(playerFormations[selectedPlayerIdx]);
+        }
         EndMode2D();
-        UIManager::DrawUI(playerSquare, visualMode, enemyAI.IsActive());
+
+        if (selectedPlayerIdx < static_cast<int>(playerFormations.size())) {
+            UIManager::DrawUI(playerFormations[selectedPlayerIdx], visualMode, enemyAI.IsActive());
+            UIManager::DrawFormationBar(playerFormations, selectedPlayerIdx);
+            formationCard.Draw(playerFormations[selectedPlayerIdx]);
+        }
         EndDrawing();
     }
-
     CloseWindow();
     return 0;
 }

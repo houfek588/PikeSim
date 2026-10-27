@@ -19,6 +19,13 @@ enum class PikeState {
     CHARGE      // Píky skloněné dopředu (pomalý bojový pochod)
 };
 
+// --- TYPY ZBRANÍ PRO ROTY ---
+enum class WeaponType {
+    PIKE,       // Píka (hloubka 10 vojáků v rotě)
+    MUSKET,     // Mušketa (hloubka 6 vojáků v rotě)
+    HALBERD     // Halaparta (hloubka 6 nebo 10 vojáků v rotě)
+};
+
 // --- REŽIM VIZUALIZACE ---
 enum class VisualMode {
     ENGRAVING,  // Styl staré papírové rytiny

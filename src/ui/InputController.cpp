@@ -1,4 +1,5 @@
 #include "ui/InputController.h"
+#include "ui/FormationCard.h"
 #include "core/MathUtils.h"
 #include "raymath.h"
 #include <cmath>
@@ -11,7 +12,15 @@ float InputController::CalculateHeadingFromVector(Vector2 start, Vector2 current
     return atan2f(dy, dx);
 }
 
-bool InputController::IsMouseOverFormation(Vector2 worldMouse, const PikeSquare& formation) const {
+bool InputController::CheckDoubleClick(Vector2 mousePos) {
+    float now = static_cast<float>(GetTime());
+    bool isDouble = (now - m_lastLmbClickTime < 0.35f) && (Vector2Distance(mousePos, m_lastLmbClickPos) < 15.0f);
+    m_lastLmbClickTime = now;
+    m_lastLmbClickPos = mousePos;
+    return isDouble;
+}
+
+bool InputController::IsMouseOverFormation(Vector2 worldMouse, const PikeSquare& formation) {
     // 1. Rychlý test vzdálenosti od geometrického středu
     float boundRadius = (formation.GetCols() * formation.GetSpacing()) * 0.75f;
     if (Vector2Distance(worldMouse, formation.GetPosition()) <= boundRadius) {
@@ -61,11 +70,100 @@ void InputController::Update(const CameraController& camera, PikeSquare& formati
         if (m_isRmbDragging && IsMouseButtonReleased(MOUSE_BUTTON_RIGHT)) {
             float dragDistance = Vector2Distance(m_rmbDragStartWorld, m_rmbDragCurrentWorld);
             if (dragDistance > 15.0f) {
-                // Tažení zadalo jak cílovou pozici středu čela, tak finální úhel natočení
                 formation.SetOrder(m_rmbDragStartWorld, m_dragHeading, true);
             } else {
-                // Prosté kliknutí zadalo pouze cílovou pozici bez vynucení rotace
                 formation.SetOrder(m_rmbDragStartWorld, 0.0f, false);
+            }
+            m_isRmbDragging = false;
+        }
+    } else {
+        m_isRmbDragging = false;
+    }
+}
+
+void InputController::UpdateMulti(CameraController& camera, std::vector<PikeSquare>& formations, int& selectedIndex, FormationCard& card) {
+    if (formations.empty()) return;
+    if (selectedIndex < 0 || selectedIndex >= static_cast<int>(formations.size())) {
+        selectedIndex = 0;
+    }
+
+    Vector2 mouseScreen = GetMousePosition();
+    Vector2 mouseWorld = camera.ScreenToWorld(mouseScreen);
+
+    // Pokud je otevřena karta formace, ignorujeme kliknutí do herního světa pod ní
+    if (card.IsOpen()) return;
+
+    // --- 1. KONTROLA KLIKNUTÍ DO SPODNÍ LIŠTY FORMACÍ ---
+    float barY = SCREEN_HEIGHT - 75.0f;
+    float cardWidth = 140.0f;
+    float cardHeight = 62.0f;
+    float gap = 10.0f;
+    float startX = 20.0f;
+
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        bool isDoubleClick = CheckDoubleClick(mouseScreen);
+        bool clickedOnBar = false;
+
+        for (size_t i = 0; i < formations.size(); ++i) {
+            Rectangle cardRect = { startX + i * (cardWidth + gap), barY, cardWidth, cardHeight };
+            if (CheckCollisionPointRec(mouseScreen, cardRect)) {
+                selectedIndex = static_cast<int>(i);
+                m_isSelected = true;
+                clickedOnBar = true;
+                if (isDoubleClick) {
+                    camera.CenterOn(formations[i].GetPosition());
+                    card.Open(selectedIndex);
+                }
+                break;
+            }
+        }
+
+        if (!clickedOnBar) {
+            int clickedFormationIdx = -1;
+            for (size_t i = 0; i < formations.size(); ++i) {
+                if (IsMouseOverFormation(mouseWorld, formations[i])) {
+                    clickedFormationIdx = static_cast<int>(i);
+                    break;
+                }
+            }
+
+            if (clickedFormationIdx >= 0) {
+                selectedIndex = clickedFormationIdx;
+                m_isSelected = true;
+                if (isDoubleClick) {
+                    card.Open(selectedIndex);
+                }
+            } else {
+                m_isSelected = false;
+            }
+        }
+    }
+
+    // --- 2. ZADÁVÁNÍ POVELŮ PRAVÝM TLAČÍTKEM MYŠI (RMB) VYBRANÉ FORMACI ---
+    if (m_isSelected && selectedIndex >= 0 && selectedIndex < static_cast<int>(formations.size())) {
+        PikeSquare& activeFormation = formations[selectedIndex];
+
+        if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+            m_isRmbDragging = true;
+            m_rmbDragStartWorld = mouseWorld;
+            m_rmbDragCurrentWorld = mouseWorld;
+            m_dragHeading = activeFormation.GetAngle();
+        }
+
+        if (m_isRmbDragging && IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+            m_rmbDragCurrentWorld = mouseWorld;
+            float dragDistance = Vector2Distance(m_rmbDragStartWorld, m_rmbDragCurrentWorld);
+            if (dragDistance > 15.0f) {
+                m_dragHeading = CalculateHeadingFromVector(m_rmbDragStartWorld, m_rmbDragCurrentWorld);
+            }
+        }
+
+        if (m_isRmbDragging && IsMouseButtonReleased(MOUSE_BUTTON_RIGHT)) {
+            float dragDistance = Vector2Distance(m_rmbDragStartWorld, m_rmbDragCurrentWorld);
+            if (dragDistance > 15.0f) {
+                activeFormation.SetOrder(m_rmbDragStartWorld, m_dragHeading, true);
+            } else {
+                activeFormation.SetOrder(m_rmbDragStartWorld, 0.0f, false);
             }
             m_isRmbDragging = false;
         }

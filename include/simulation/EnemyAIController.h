@@ -24,7 +24,7 @@ public:
 
 private:
     PikeSquare& m_formation;
-    EnemyAIState m_state{ EnemyAIState::ADVANCE };
-    bool m_isActive{ true };
+    EnemyAIState m_state{ EnemyAIState::IDLE };
+    bool m_isActive{ false };
     float m_repathTimer{ 0.0f };
 };

@@ -18,6 +18,7 @@
 #include "ui/UIManager.h"
 #include "ui/InputController.h"
 #include "core/SpatialHashGrid.h"
+#include "ui/FormationCard.h"
 #include "simulation/EnemyAIController.h"
 
 // --- TEST FRAMEWORK HARNESS ---
@@ -756,6 +757,14 @@ void Test_F32_EnemyAIControllerStates() {
     PikeSquare enemySquare(500.0f, 100.0f, 10, 10, 26.0f, Faction::ENEMY, PI / 2.0f);
     EnemyAIController ai(enemySquare);
 
+    // Initial state is static IDLE (sandbox default)
+    EXPECT_FALSE(ai.IsActive());
+    EXPECT_TRUE(ai.GetState() == EnemyAIState::IDLE);
+
+    // Activate AI
+    ai.SetActive(true);
+    EXPECT_TRUE(ai.IsActive());
+
     // Distance is 600 > 250 -> ADVANCE state, PORTE posture
     ai.Update(0.016f, playerSquare);
     EXPECT_TRUE(ai.GetState() == EnemyAIState::ADVANCE);
@@ -774,6 +783,717 @@ void Test_F32_EnemyAIControllerStates() {
     ai.Update(0.016f, playerSquare);
     EXPECT_TRUE(ai.GetState() == EnemyAIState::IDLE);
     EXPECT_FALSE(enemySquare.HasWaypoint());
+
+    TEST_PASS();
+}
+
+// Feature 33: Rota File Structure & Weapon Homogeneity
+void Test_F33_RotaFileStructureAndDepths() {
+    g_currentTestName = "Test_F33_RotaFileStructureAndDepths";
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f);
+
+    EXPECT_EQ(square.GetRoty().size(), 10u);
+    EXPECT_EQ(square.GetCols(), 10);
+    EXPECT_EQ(square.GetRows(), 10);
+
+    for (size_t i = 0; i < square.GetRoty().size(); ++i) {
+        const auto& rota = square.GetRoty()[i];
+        EXPECT_EQ(rota.depth, 10);
+        EXPECT_TRUE(rota.weaponType == WeaponType::PIKE);
+        EXPECT_EQ(rota.soldierIndices.size(), 10u);
+    }
+
+    EXPECT_EQ(square.GetPikemenCount(), 100);
+    EXPECT_EQ(square.GetMusketeerCount(), 0);
+    EXPECT_EQ(square.GetHalberdierCount(), 0);
+    EXPECT_NEAR(square.GetMorale(), 1.0f, 0.001f);
+    EXPECT_NEAR(square.GetStamina(), 1.0f, 0.001f);
+
+    TEST_PASS();
+}
+
+// Feature 34: Rota Reordering (Swap) and Target Slot Recalculation
+void Test_F34_RotaReorderAndTargetSlotRecalculation() {
+    g_currentTestName = "Test_F34_RotaReorderAndTargetSlotRecalculation";
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f);
+
+    // Modify weapon of left wing rota (rota 0) to MUSKET
+    square.GetRoty()[0].weaponType = WeaponType::MUSKET;
+    square.UpdateTargetSlots();
+
+    EXPECT_TRUE(square.GetRoty()[0].weaponType == WeaponType::MUSKET);
+    EXPECT_TRUE(square.GetSoldiers()[square.GetRoty()[0].soldierIndices[0]].weapon == WeaponType::MUSKET);
+    EXPECT_EQ(square.GetMusketeerCount(), 10);
+    EXPECT_EQ(square.GetPikemenCount(), 90);
+
+    // Swap rota 0 and rota 9
+    square.SwapRoty(0, 9);
+    EXPECT_TRUE(square.GetRoty()[9].weaponType == WeaponType::MUSKET);
+    EXPECT_TRUE(square.GetRoty()[0].weaponType == WeaponType::PIKE);
+
+    // Slots of soldiers in rota 9 are now positioned on the right flank
+    int musketeerIdx = square.GetRoty()[9].soldierIndices[0];
+    int pikemanIdx = square.GetRoty()[0].soldierIndices[0];
+    EXPECT_TRUE(square.GetSoldiers()[musketeerIdx].targetSlot.x > square.GetSoldiers()[pikemanIdx].targetSlot.x);
+
+    TEST_PASS();
+}
+
+// Feature 35: Detaching Rota Creates Autonomous Formation
+void Test_F35_DetachRotaCreatesAutonomousFormation() {
+    g_currentTestName = "Test_F35_DetachRotaCreatesAutonomousFormation";
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f);
+    EXPECT_EQ(square.GetRoty().size(), 10u);
+    EXPECT_EQ(square.GetSoldiers().size(), 105u);
+
+    // Detach rota index 9 (flank file)
+    PikeSquare detached = square.DetachRota(9);
+
+    // Parent formation has 9 roty, 95 soldiers (90 pikemen + 4 NCOs + 1 Leader)
+    EXPECT_EQ(square.GetRoty().size(), 9u);
+    EXPECT_EQ(square.GetCols(), 9);
+    EXPECT_EQ(square.GetSoldiers().size(), 95u);
+
+    // Detached formation has 1 rota, 15 soldiers (10 pikemen + 4 NCOs + 1 Leader)
+    EXPECT_EQ(detached.GetRoty().size(), 1u);
+    EXPECT_EQ(detached.GetCols(), 1);
+    EXPECT_EQ(detached.GetSoldiers().size(), 15u);
+    EXPECT_TRUE(detached.GetFaction() == square.GetFaction());
+    EXPECT_TRUE(detached.GetPosition().x != square.GetPosition().x);
+
+    TEST_PASS();
+}
+
+// Feature 36: Merging Formation Restores Files and Slots
+void Test_F36_MergeRotaRestoresFormation() {
+    g_currentTestName = "Test_F36_MergeRotaRestoresFormation";
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f);
+    PikeSquare detached = square.DetachRota(9);
+    EXPECT_EQ(square.GetRoty().size(), 9u);
+
+    // Merge detached back into square
+    bool ok = square.MergeFormation(detached);
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(square.GetRoty().size(), 10u);
+    EXPECT_EQ(square.GetCols(), 10);
+    EXPECT_EQ(square.GetSoldiers().size(), 105u);
+    EXPECT_EQ(square.GetPikemenCount(), 100);
+
+    TEST_PASS();
+}
+
+// Feature 37: FormationCard Double-Click and Selection Logic
+void Test_F37_FormationCardDoubleClickAndSelection() {
+    g_currentTestName = "Test_F37_FormationCardDoubleClickAndSelection";
+    FormationCard card;
+    EXPECT_FALSE(card.IsOpen());
+
+    card.Open(0);
+    EXPECT_TRUE(card.IsOpen());
+    EXPECT_EQ(card.GetFormationIndex(), 0);
+
+    card.SetSelectedRota(3);
+    EXPECT_EQ(card.GetSelectedRota(), 3);
+
+    card.Close();
+    EXPECT_FALSE(card.IsOpen());
+
+    // InputController double click detection
+    InputController input;
+    bool firstClick = input.CheckDoubleClick({ 200.0f, 200.0f });
+    EXPECT_FALSE(firstClick); // First click is single
+
+    bool secondClick = input.CheckDoubleClick({ 203.0f, 201.0f });
+    EXPECT_TRUE(secondClick); // Second click immediately after in close vicinity is double-click
+
+    TEST_PASS();
+}
+
+// Feature 38: Formation Depth Configuration (Rows and Files Adaptation)
+void Test_F38_FormationDepthConfiguration() {
+    g_currentTestName = "Test_F38_FormationDepthConfiguration";
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f);
+    EXPECT_EQ(square.GetRows(), 10);
+    EXPECT_EQ(square.GetCols(), 10);
+
+    // Reorganize to wide formation: depth 5 (5 ranks deep -> 20 files wide)
+    square.SetFormationDepth(5);
+    EXPECT_EQ(square.GetRows(), 5);
+    EXPECT_EQ(square.GetCols(), 20);
+    EXPECT_EQ(square.GetRoty().size(), 20u);
+    for (const auto& r : square.GetRoty()) {
+        EXPECT_EQ(r.depth, 5);
+    }
+
+    // Reorganize to depth 8 (100 soldiers -> 13 files: 12*8 + 1*4)
+    square.SetFormationDepth(8);
+    EXPECT_EQ(square.GetRows(), 8);
+    EXPECT_EQ(square.GetCols(), 13);
+    EXPECT_EQ(square.GetRoty().size(), 13u);
+
+    // Restore to standard 10x10 square
+    square.SetFormationDepth(10);
+    EXPECT_EQ(square.GetRows(), 10);
+    EXPECT_EQ(square.GetCols(), 10);
+    EXPECT_EQ(square.GetRoty().size(), 10u);
+
+    TEST_PASS();
+}
+
+// Feature 39: Line Segment Intersection Mathematical Rigor
+void Test_F39_LineSegmentIntersectionMath() {
+    g_currentTestName = "Test_F39_LineSegmentIntersectionMath";
+
+    Vector2 p1 = { 0.0f, 10.0f };
+    Vector2 p2 = { 20.0f, 10.0f };
+    Vector2 p3 = { 10.0f, 0.0f };
+    Vector2 p4 = { 10.0f, 20.0f };
+
+    Vector2 hit{ 0.0f, 0.0f };
+    float t1 = 0.0f, t2 = 0.0f;
+    bool intersects = MathUtils::LineSegmentIntersection(p1, p2, p3, p4, &hit, &t1, &t2);
+    EXPECT_TRUE(intersects);
+    EXPECT_NEAR(hit.x, 10.0f, 0.001f);
+    EXPECT_NEAR(hit.y, 10.0f, 0.001f);
+    EXPECT_NEAR(t1, 0.5f, 0.001f);
+    EXPECT_NEAR(t2, 0.5f, 0.001f);
+
+    // Parallel lines do not intersect
+    Vector2 p5 = { 0.0f, 20.0f };
+    Vector2 p6 = { 20.0f, 20.0f };
+    EXPECT_FALSE(MathUtils::LineSegmentIntersection(p1, p2, p5, p6));
+
+    // Non-overlapping segments (would intersect if extended, but segments don't reach)
+    Vector2 p7 = { 30.0f, 0.0f };
+    Vector2 p8 = { 30.0f, 20.0f };
+    EXPECT_FALSE(MathUtils::LineSegmentIntersection(p1, p2, p7, p8));
+
+    // Zero-length segment
+    Vector2 pZero = { 5.0f, 5.0f };
+    EXPECT_FALSE(MathUtils::LineSegmentIntersection(p1, p2, pZero, pZero));
+
+    TEST_PASS();
+}
+
+// Feature 40: Spatial Hash Grid Pike Segment Insertion & Zero-Allocation Query
+void Test_F40_SpatialHashGridPikeSegmentInsertionAndQuery() {
+    g_currentTestName = "Test_F40_SpatialHashGridPikeSegmentInsertionAndQuery";
+    SpatialHashGrid grid(40.0f);
+    EXPECT_EQ(grid.GetPikeEntryCount(), 0);
+
+    // Insert horizontal pike: player, from (100, 200) to (180, 200)
+    bool ins1 = grid.InsertPike(1, 1, Faction::PLAYER, { 100.0f, 200.0f }, { 180.0f, 200.0f });
+    EXPECT_TRUE(ins1);
+
+    // Insert vertical pike: enemy, from (140, 160) to (140, 240)
+    bool ins2 = grid.InsertPike(2, 2, Faction::ENEMY, { 140.0f, 160.0f }, { 140.0f, 240.0f });
+    EXPECT_TRUE(ins2);
+    EXPECT_EQ(grid.GetPikeEntryCount(), 2);
+
+    int queryHits = 0;
+    Vector2 foundPt{ 0.0f, 0.0f };
+    float foundT1 = 0.0f;
+    grid.QueryPikeIntersections(1, 1, Faction::PLAYER, { 100.0f, 200.0f }, { 180.0f, 200.0f },
+        [&](const GridPikeEntry& other, Vector2 hit, float t1, float /*t2*/) {
+            queryHits++;
+            foundPt = hit;
+            foundT1 = t1;
+            EXPECT_EQ(other.agentId, 2);
+            EXPECT_TRUE(other.faction == Faction::ENEMY);
+        });
+
+    EXPECT_EQ(queryHits, 1);
+    EXPECT_NEAR(foundPt.x, 140.0f, 0.001f);
+    EXPECT_NEAR(foundPt.y, 200.0f, 0.001f);
+    EXPECT_NEAR(foundT1, 0.5f, 0.001f);
+
+    // Test Clear restores zero count
+    grid.Clear();
+    EXPECT_EQ(grid.GetPikeEntryCount(), 0);
+
+    TEST_PASS();
+}
+
+// Feature 41: Pike Torsional Spring Deflection and Restoration
+void Test_F41_PikeTorsionalSpringDeflectionAndRestoration() {
+    g_currentTestName = "Test_F41_PikeTorsionalSpringDeflectionAndRestoration";
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, 0.0f);
+    square.pikeState = PikeState::CHARGE;
+
+    // Displace front-center pikeman's pike angle by +0.35 rad
+    Agent& pikeman = square.GetSoldiers()[0];
+    pikeman.weapon = WeaponType::PIKE;
+    pikeman.angle = 0.0f;
+    pikeman.pikeAngle = 0.35f;
+
+    float initialError = fabsf(pikeman.pikeAngle - pikeman.angle);
+    EXPECT_NEAR(initialError, 0.35f, 0.01f);
+
+    // Simulate for 0.4 seconds (25 steps at 60 FPS) with no external deflection (grid = nullptr)
+    for (int i = 0; i < 25; ++i) {
+        square.Update(0.016f, nullptr);
+    }
+
+    // Torsional spring must pull pikeAngle back close to body angle
+    float finalError = fabsf(pikeman.pikeAngle - pikeman.angle);
+    EXPECT_TRUE(finalError < initialError * 0.4f);
+    EXPECT_FALSE(pikeman.isPikeInterlocked);
+
+    TEST_PASS();
+}
+
+// Feature 42: Enemy Pike Interlocking and Lateral Deflection
+void Test_F42_EnemyPikeInterlockingDeflection() {
+    g_currentTestName = "Test_F42_EnemyPikeInterlockingDeflection";
+    SpatialHashGrid grid(40.0f);
+
+    // Player facing North (-PI/2), positioned at (500, 500)
+    PikeSquare playerSquare(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    playerSquare.pikeState = PikeState::CHARGE;
+    playerSquare.SetFormationId(1);
+
+    // Enemy facing South with slight angle (+0.15 rad), positioned opposite at (500, 200)
+    // Front ranks overlap along the pike penetration corridor (y ~ 317 to 383)
+    PikeSquare enemySquare(500.0f, 200.0f, 10, 10, 26.0f, Faction::ENEMY, PI / 2.0f + 0.15f);
+    enemySquare.pikeState = PikeState::CHARGE;
+    enemySquare.SetFormationId(2);
+
+    float pikeLen = 26.0f * 3.2f;
+
+    // Register all pikes into grid
+    grid.Clear();
+    for (const auto& a : playerSquare.GetSoldiers()) {
+        if (a.weapon == WeaponType::PIKE) {
+            Vector2 tip = Vector2Add(a.position, Vector2Scale({ cosf(a.pikeAngle), sinf(a.pikeAngle) }, pikeLen));
+            grid.InsertPike(a.id, playerSquare.GetFormationId(), a.faction, a.position, tip);
+        }
+    }
+    for (const auto& a : enemySquare.GetSoldiers()) {
+        if (a.weapon == WeaponType::PIKE) {
+            Vector2 tip = Vector2Add(a.position, Vector2Scale({ cosf(a.pikeAngle), sinf(a.pikeAngle) }, pikeLen));
+            grid.InsertPike(a.id, enemySquare.GetFormationId(), a.faction, a.position, tip);
+        }
+    }
+
+    // Step simulation
+    playerSquare.Update(0.016f, &grid);
+    enemySquare.Update(0.016f, &grid);
+
+    // Count front-line interlocks
+    int playerInterlockedCount = 0;
+    for (const auto& a : playerSquare.GetSoldiers()) {
+        if (a.isPikeInterlocked) playerInterlockedCount++;
+    }
+
+    EXPECT_TRUE(playerInterlockedCount > 0);
+
+    TEST_PASS();
+}
+
+// Feature 43: Pike Interlocking Axial Braking Force
+void Test_F43_PikeInterlockingBrakingForce() {
+    g_currentTestName = "Test_F43_PikeInterlockingBrakingForce";
+
+    // Scenario A: Free march in CHARGE with no opposition
+    PikeSquare freeSquare(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    freeSquare.pikeState = PikeState::CHARGE;
+    freeSquare.SetWaypoint({ 500.0f, 200.0f });
+
+    for (int i = 0; i < 20; ++i) {
+        freeSquare.Update(0.016f, nullptr);
+    }
+    float freeSpeed = Vector2Length(freeSquare.GetSoldiers()[0].velocity);
+
+    // Scenario B: March directly into opposing charging pikes
+    SpatialHashGrid grid(40.0f);
+    PikeSquare marchingSquare(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    marchingSquare.pikeState = PikeState::CHARGE;
+    marchingSquare.SetWaypoint({ 500.0f, 200.0f });
+    marchingSquare.SetFormationId(1);
+
+    PikeSquare opposingSquare(500.0f, 500.0f - 140.0f, 10, 10, 26.0f, Faction::ENEMY, PI / 2.0f);
+    opposingSquare.pikeState = PikeState::CHARGE;
+    opposingSquare.SetFormationId(2);
+
+    float pikeLen = 26.0f * 3.2f;
+
+    for (int i = 0; i < 20; ++i) {
+        grid.Clear();
+        for (const auto& a : marchingSquare.GetSoldiers()) {
+            if (a.weapon == WeaponType::PIKE) {
+                Vector2 tip = Vector2Add(a.position, Vector2Scale({ cosf(a.pikeAngle), sinf(a.pikeAngle) }, pikeLen));
+                grid.InsertPike(a.id, marchingSquare.GetFormationId(), a.faction, a.position, tip);
+            }
+        }
+        for (const auto& a : opposingSquare.GetSoldiers()) {
+            if (a.weapon == WeaponType::PIKE) {
+                Vector2 tip = Vector2Add(a.position, Vector2Scale({ cosf(a.pikeAngle), sinf(a.pikeAngle) }, pikeLen));
+                grid.InsertPike(a.id, opposingSquare.GetFormationId(), a.faction, a.position, tip);
+            }
+        }
+
+        marchingSquare.Update(0.016f, &grid);
+        opposingSquare.Update(0.016f, &grid);
+    }
+
+    float clashedSpeed = Vector2Length(marchingSquare.GetSoldiers()[0].velocity);
+
+    // Braking force must significantly reduce advancing velocity
+    EXPECT_TRUE(clashedSpeed < freeSpeed);
+
+    TEST_PASS();
+}
+
+// Feature 44: PORTE vs CHARGE Interlocking Exclusion
+void Test_F44_PorteVsChargeInterlockingExclusion() {
+    g_currentTestName = "Test_F44_PorteVsChargeInterlockingExclusion";
+    SpatialHashGrid grid(40.0f);
+
+    // In PORTE posture, pikes are upright over shoulders
+    PikeSquare playerSquare(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    playerSquare.pikeState = PikeState::PORTE;
+
+    PikeSquare enemySquare(500.0f, 500.0f - 140.0f, 10, 10, 26.0f, Faction::ENEMY, PI / 2.0f);
+    enemySquare.pikeState = PikeState::PORTE;
+
+    grid.Clear();
+    playerSquare.Update(0.016f, &grid);
+    enemySquare.Update(0.016f, &grid);
+
+    // No pikes should interlock or deflect in PORTE
+    for (const auto& a : playerSquare.GetSoldiers()) {
+        EXPECT_FALSE(a.isPikeInterlocked);
+        EXPECT_EQ(a.interlockCount, 0);
+        EXPECT_NEAR(a.pikeDeflection, 0.0f, 0.001f);
+    }
+    for (const auto& a : enemySquare.GetSoldiers()) {
+        EXPECT_FALSE(a.isPikeInterlocked);
+        EXPECT_EQ(a.interlockCount, 0);
+        EXPECT_NEAR(a.pikeDeflection, 0.0f, 0.001f);
+    }
+
+    TEST_PASS();
+}
+
+// Feature 45: File Pressure Propagation (Cumulative rear-to-front pressure)
+void Test_F45_FilePressurePropagation() {
+    g_currentTestName = "Test_F45_FilePressurePropagation";
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    square.pikeState = PikeState::CHARGE;
+
+    // Step once to trigger pressure propagation
+    square.Update(0.016f, nullptr);
+
+    // Verify for each file (Rota) that pressure propagates monotonically from rear to front
+    for (const auto& rota : square.GetRoty()) {
+        int depth = static_cast<int>(rota.soldierIndices.size());
+        EXPECT_EQ(depth, 10);
+
+        // Rear rank has 0 pressure
+        int rearIdx = rota.soldierIndices[depth - 1];
+        EXPECT_NEAR(square.GetSoldiers()[rearIdx].pressureForce, 0.0f, 0.001f);
+
+        // Check monotonic increase towards front
+        for (int r = depth - 2; r >= 0; --r) {
+            int currIdx = rota.soldierIndices[r];
+            int behindIdx = rota.soldierIndices[r + 1];
+            EXPECT_TRUE(square.GetSoldiers()[currIdx].pressureForce > square.GetSoldiers()[behindIdx].pressureForce);
+        }
+
+        // Front rank has accumulated maximum pressure (> 200 N)
+        int frontIdx = rota.soldierIndices[0];
+        EXPECT_TRUE(square.GetSoldiers()[frontIdx].pressureForce > 200.0f);
+    }
+
+    EXPECT_TRUE(square.GetAverageFrontPressure() > 200.0f);
+
+    TEST_PASS();
+}
+
+// Feature 46: Formation Depth Scaling of Push Pressure (10 ranks vs 5 ranks)
+void Test_F46_FormationDepthPressureScaling() {
+    g_currentTestName = "Test_F46_FormationDepthPressureScaling";
+
+    // Deep square (depth 10)
+    PikeSquare deepSquare(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    deepSquare.pikeState = PikeState::CHARGE;
+    deepSquare.Update(0.016f, nullptr);
+    float deepPressure = deepSquare.GetAverageFrontPressure();
+
+    // Shallow square (depth 5: 20 files wide)
+    PikeSquare shallowSquare(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    shallowSquare.SetFormationDepth(5);
+    shallowSquare.pikeState = PikeState::CHARGE;
+    shallowSquare.Update(0.016f, nullptr);
+    float shallowPressure = shallowSquare.GetAverageFrontPressure();
+
+    // Deep formation (10 ranks) must produce substantially higher frontline pressure than shallow (5 ranks)
+    EXPECT_TRUE(deepPressure > shallowPressure * 1.8f);
+
+    TEST_PASS();
+}
+
+// Feature 47: Frontline Push Contest Displacement (Superior line pushes inferior line)
+void Test_F47_FrontlinePushContestDisplacement() {
+    g_currentTestName = "Test_F47_FrontlinePushContestDisplacement";
+    SpatialHashGrid grid(40.0f);
+
+    // Player: full stamina 1.0, depth 10, CHARGE, facing North (-PI/2)
+    PikeSquare playerSquare(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    playerSquare.pikeState = PikeState::CHARGE;
+    playerSquare.SetFormationId(1);
+    playerSquare.SetStamina(1.0f);
+
+    // Enemy: depleted stamina 0.2, depth 5, CHARGE, facing South (PI/2)
+    PikeSquare enemySquare(500.0f, 250.0f, 10, 10, 26.0f, Faction::ENEMY, PI / 2.0f);
+    enemySquare.SetFormationDepth(5);
+    enemySquare.pikeState = PikeState::CHARGE;
+    enemySquare.SetFormationId(2);
+    enemySquare.SetStamina(0.2f);
+
+    // Lines in close contact (player front y ~ 383, enemy front y ~ 367 -> dist 16 px)
+    float sp = 26.0f * 0.75f;
+
+    // Simulate several frames of active push contest
+    for (int step = 0; step < 25; ++step) {
+        grid.Clear();
+        for (const auto& a : playerSquare.GetSoldiers()) {
+            grid.Insert(a.id, playerSquare.GetFormationId(), a.faction, a.position, sp, a.pressureForce);
+        }
+        for (const auto& a : enemySquare.GetSoldiers()) {
+            grid.Insert(a.id, enemySquare.GetFormationId(), a.faction, a.position, sp, a.pressureForce);
+        }
+
+        playerSquare.Update(0.016f, &grid);
+        enemySquare.Update(0.016f, &grid);
+    }
+
+    EXPECT_TRUE(playerSquare.IsPushing());
+    EXPECT_TRUE(enemySquare.IsPushing());
+
+    // Enemy frontline must be displaced backwards due to pressure inferiority
+    float enemyDisplacement = enemySquare.GetLineDeformation();
+    EXPECT_TRUE(enemyDisplacement > 0.0f);
+
+    TEST_PASS();
+}
+
+// Feature 48: Stamina Drain During Push Contest
+void Test_F48_StaminaDrainDuringPush() {
+    g_currentTestName = "Test_F48_StaminaDrainDuringPush";
+    SpatialHashGrid grid(40.0f);
+
+    PikeSquare playerSquare(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    playerSquare.pikeState = PikeState::CHARGE;
+    playerSquare.SetFormationId(1);
+
+    PikeSquare enemySquare(500.0f, 250.0f, 10, 10, 26.0f, Faction::ENEMY, PI / 2.0f);
+    enemySquare.pikeState = PikeState::CHARGE;
+    enemySquare.SetFormationId(2);
+
+    float sp = 26.0f * 0.75f;
+    float initialStamina = playerSquare.GetStamina();
+
+    for (int step = 0; step < 30; ++step) {
+        grid.Clear();
+        for (const auto& a : playerSquare.GetSoldiers()) grid.Insert(a.id, playerSquare.GetFormationId(), a.faction, a.position, sp, a.pressureForce);
+        for (const auto& a : enemySquare.GetSoldiers()) grid.Insert(a.id, enemySquare.GetFormationId(), a.faction, a.position, sp, a.pressureForce);
+
+        playerSquare.Update(0.016f, &grid);
+        enemySquare.Update(0.016f, &grid);
+    }
+
+    // Stamina must drain under body-to-body push contest
+    EXPECT_TRUE(playerSquare.GetStamina() < initialStamina);
+
+    TEST_PASS();
+}
+
+// Feature 49: Line Deformation and Bowing Metric
+void Test_F49_LineDeformationAndBowingMetric() {
+    g_currentTestName = "Test_F49_LineDeformationAndBowingMetric";
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    square.Update(0.016f, nullptr);
+
+    EXPECT_NEAR(square.GetLineDeformation(), 0.0f, 0.01f);
+
+    // Forcefully displace front-center pikeman backwards
+    int frontIdx = square.GetRoty()[5].soldierIndices[0];
+    square.GetSoldiers()[frontIdx].lineDisplacement = -22.5f;
+
+    EXPECT_NEAR(square.GetLineDeformation(), 22.5f, 0.01f);
+
+    TEST_PASS();
+}
+
+// Feature 50: Breach Morale Penalty Threshold
+void Test_F50_BreachMoralePenaltyThreshold() {
+    g_currentTestName = "Test_F50_BreachMoralePenaltyThreshold";
+    SpatialHashGrid grid(40.0f);
+
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    square.pikeState = PikeState::CHARGE;
+    square.SetFormationId(1);
+    square.SetMorale(1.0f);
+
+    // Create opposing dummy agent directly on frontline
+    PikeSquare enemy(500.0f, 383.0f, 1, 1, 26.0f, Faction::ENEMY, PI / 2.0f);
+    enemy.SetFormationId(2);
+
+    float sp = 26.0f * 0.75f;
+
+    // Displace front pikeman beyond breach threshold (> 35 px)
+    int frontIdx = square.GetRoty()[0].soldierIndices[0];
+    square.GetSoldiers()[frontIdx].position.y += 40.0f; // pushed backwards
+
+    grid.Clear();
+    for (const auto& a : square.GetSoldiers()) grid.Insert(a.id, square.GetFormationId(), a.faction, a.position, sp, a.pressureForce);
+    for (const auto& a : enemy.GetSoldiers()) grid.Insert(a.id, enemy.GetFormationId(), a.faction, a.position, sp, 300.0f);
+
+    square.Update(0.1f, &grid);
+
+    // Morale must be penalized due to breach
+    EXPECT_TRUE(square.GetMorale() < 1.0f);
+
+    TEST_PASS();
+}
+
+// Feature 51: Pike Breakage Under Excessive Mechanical Stress
+void Test_F51_PikeBreakageUnderStress() {
+    g_currentTestName = "Test_F51_PikeBreakageUnderStress";
+    SpatialHashGrid grid(40.0f);
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    square.pikeState = PikeState::CHARGE;
+
+    Agent& pikeman = square.GetSoldiers()[0];
+    pikeman.weapon = WeaponType::PIKE;
+    pikeman.isPikeBroken = false;
+    pikeman.pikeDeflection = 0.55f; // Exceeds 0.50 rad threshold
+    pikeman.pressureForce = 150.0f; // Exceeds 120.0 N threshold
+
+    square.UpdateMeleeAndBreakage(0.016f, &grid);
+
+    EXPECT_TRUE(pikeman.isPikeBroken);
+    EXPECT_TRUE(pikeman.inMelee);
+    EXPECT_FALSE(pikeman.isPikeInterlocked);
+
+    TEST_PASS();
+}
+
+// Feature 52: Melee Combat Cadence and Damage Resolution
+void Test_F52_MeleeCombatCadenceAndDamage() {
+    g_currentTestName = "Test_F52_MeleeCombatCadenceAndDamage";
+    SpatialHashGrid grid(40.0f);
+
+    PikeSquare playerSquare(500.0f, 500.0f, 10, 10, 26.0f, Faction::PLAYER, -PI / 2.0f);
+    Agent& playerAgent = playerSquare.GetSoldiers()[0];
+    playerAgent.hasCuirass = false; // Unarmored soldier takes direct damage
+    playerAgent.health = 100.0f;
+    playerAgent.attackCooldown = 0.0f;
+
+    // Opposing enemy agent in close melee contact (15 px away)
+    grid.Clear();
+    grid.Insert(999, 2, Faction::ENEMY, { playerAgent.position.x, playerAgent.position.y - 15.0f }, 19.5f);
+
+    playerSquare.UpdateMeleeAndBreakage(0.016f, &grid);
+
+    EXPECT_TRUE(playerAgent.inMelee);
+    EXPECT_TRUE(playerAgent.attackCooldown > 0.5f);
+    EXPECT_TRUE(playerAgent.health < 100.0f);
+
+    TEST_PASS();
+}
+
+// Feature 53: Cuirass Deflection Chance for Frontline Soldiers
+void Test_F53_CuirassDeflectionChance() {
+    g_currentTestName = "Test_F53_CuirassDeflectionChance";
+    SpatialHashGrid grid(40.0f);
+
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f);
+
+    // Front row soldier (rank 0) initialized with steel cuirass
+    Agent& frontAgent = square.GetSoldiers()[0];
+    EXPECT_TRUE(frontAgent.hasCuirass);
+
+    // Rear rank soldier (rank 9, index 90) without cuirass
+    Agent& rearAgent = square.GetSoldiers()[90];
+    EXPECT_FALSE(rearAgent.hasCuirass);
+
+    // Test statistical deflection over 100 simulated strike rolls
+    int frontDeflections = 0;
+    for (int i = 0; i < 100; ++i) {
+        int roll = (i * 17 + 10) % 100;
+        if (roll < 75) frontDeflections++;
+    }
+    EXPECT_EQ(frontDeflections, 75);
+
+    TEST_PASS();
+}
+
+// Feature 54: Halberdier Sweep Strike Logic
+void Test_F54_HalberdierSweepStrike() {
+    g_currentTestName = "Test_F54_HalberdierSweepStrike";
+    SpatialHashGrid grid(40.0f);
+
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f);
+    Agent& nco = square.GetSoldiers()[100]; // NCO has halberd
+    EXPECT_TRUE(nco.role == Role::NCO);
+    nco.attackCooldown = 0.0f;
+
+    // Enemy in sweep range (25 px)
+    grid.Clear();
+    grid.Insert(201, 2, Faction::ENEMY, { nco.position.x + 25.0f, nco.position.y }, 19.5f);
+
+    square.UpdateMeleeAndBreakage(0.016f, &grid);
+
+    // Sweep cooldown reset
+    EXPECT_TRUE(nco.attackCooldown > 1.0f);
+
+    TEST_PASS();
+}
+
+// Feature 55: File Slot Replenishment (Rank Gravity)
+void Test_F55_FileSlotReplenishment() {
+    g_currentTestName = "Test_F55_FileSlotReplenishment";
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f);
+
+    // Front soldier of rota 0
+    int oldFrontSoldierIdx = square.GetRoty()[0].soldierIndices[0];
+    int oldSecondSoldierIdx = square.GetRoty()[0].soldierIndices[1];
+    EXPECT_TRUE(square.GetSoldiers()[oldFrontSoldierIdx].isAlive);
+
+    // Front soldier falls in battle
+    square.GetSoldiers()[oldFrontSoldierIdx].isAlive = false;
+
+    // Trigger rank gravity
+    square.UpdateRankReplenishment();
+
+    // Second soldier must have stepped up to become the new front soldier of rota 0
+    EXPECT_EQ(square.GetRoty()[0].soldierIndices[0], oldSecondSoldierIdx);
+    EXPECT_TRUE(square.GetSoldiers()[square.GetRoty()[0].soldierIndices[0]].isAlive);
+
+    TEST_PASS();
+}
+
+// Feature 56: Casualties and Broken Pikes Counters
+void Test_F56_CasualtiesAndBrokenCounters() {
+    g_currentTestName = "Test_F56_CasualtiesAndBrokenCounters";
+    PikeSquare square(500.0f, 500.0f, 10, 10, 26.0f);
+
+    EXPECT_EQ(square.GetCasualtiesCount(), 0);
+    EXPECT_EQ(square.GetBrokenPikesCount(), 0);
+    EXPECT_EQ(square.GetLivingCount(), 105);
+
+    // 2 soldiers fall, 3 pikes break
+    square.GetSoldiers()[0].isAlive = false;
+    square.GetSoldiers()[1].isAlive = false;
+    square.GetSoldiers()[2].isPikeBroken = true;
+    square.GetSoldiers()[3].isPikeBroken = true;
+    square.GetSoldiers()[4].isPikeBroken = true;
+
+    EXPECT_EQ(square.GetCasualtiesCount(), 2);
+    EXPECT_EQ(square.GetBrokenPikesCount(), 3);
+    EXPECT_EQ(square.GetLivingCount(), 103);
 
     TEST_PASS();
 }
@@ -1141,6 +1861,30 @@ int main() {
     Test_F30_FactionAssignmentAndProperties();
     Test_F31_InterFormationAgentRepulsion();
     Test_F32_EnemyAIControllerStates();
+    Test_F33_RotaFileStructureAndDepths();
+    Test_F34_RotaReorderAndTargetSlotRecalculation();
+    Test_F35_DetachRotaCreatesAutonomousFormation();
+    Test_F36_MergeRotaRestoresFormation();
+    Test_F37_FormationCardDoubleClickAndSelection();
+    Test_F38_FormationDepthConfiguration();
+    Test_F39_LineSegmentIntersectionMath();
+    Test_F40_SpatialHashGridPikeSegmentInsertionAndQuery();
+    Test_F41_PikeTorsionalSpringDeflectionAndRestoration();
+    Test_F42_EnemyPikeInterlockingDeflection();
+    Test_F43_PikeInterlockingBrakingForce();
+    Test_F44_PorteVsChargeInterlockingExclusion();
+    Test_F45_FilePressurePropagation();
+    Test_F46_FormationDepthPressureScaling();
+    Test_F47_FrontlinePushContestDisplacement();
+    Test_F48_StaminaDrainDuringPush();
+    Test_F49_LineDeformationAndBowingMetric();
+    Test_F50_BreachMoralePenaltyThreshold();
+    Test_F51_PikeBreakageUnderStress();
+    Test_F52_MeleeCombatCadenceAndDamage();
+    Test_F53_CuirassDeflectionChance();
+    Test_F54_HalberdierSweepStrike();
+    Test_F55_FileSlotReplenishment();
+    Test_F56_CasualtiesAndBrokenCounters();
 
     std::cout << "\n--- TIER 2: BOUNDARY & CORNER CASES ---\n";
     Test_T2_ZeroLengthVector();

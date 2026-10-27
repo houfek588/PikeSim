@@ -4,8 +4,8 @@
 
 EnemyAIController::EnemyAIController(PikeSquare& controlledFormation)
     : m_formation(controlledFormation)
-    , m_state(EnemyAIState::ADVANCE)
-    , m_isActive(true)
+    , m_state(EnemyAIState::IDLE)
+    , m_isActive(false)
     , m_repathTimer(0.0f)
 {
 }

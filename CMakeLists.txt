@@ -43,6 +43,7 @@ set(SOURCES
     src/rendering/CameraController.cpp
     src/ui/UIManager.cpp
     src/ui/InputController.cpp
+    src/ui/FormationCard.cpp
 )
 
 set(HEADERS
@@ -51,6 +52,7 @@ set(HEADERS
     include/core/SpatialHashGrid.h
     include/simulation/Agent.h
     include/simulation/EnemyAIController.h
+    include/formation/Rota.h
     include/formation/PikeSquare.h
     include/rendering/IRenderer.h
     include/rendering/EngravingRenderer.h
@@ -58,6 +60,7 @@ set(HEADERS
     include/rendering/CameraController.h
     include/ui/UIManager.h
     include/ui/InputController.h
+    include/ui/FormationCard.h
 )
 
 # --- DEFINICE EXECUTABLE ---
@@ -98,6 +101,7 @@ set(TEST_SOURCES
     src/rendering/CameraController.cpp
     src/ui/UIManager.cpp
     src/ui/InputController.cpp
+    src/ui/FormationCard.cpp
 )
 
 add_executable(PikeSimTests ${TEST_SOURCES} ${HEADERS})

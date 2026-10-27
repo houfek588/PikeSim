@@ -4,13 +4,18 @@
 #include "formation/PikeSquare.h"
 #include "rendering/CameraController.h"
 
+class FormationCard;
+
 // --- OVLADAČ RTS VSTUPŮ (TOTAL WAR STYL VÝBĚRU A POVELŮ) ---
 class InputController {
 public:
     InputController();
 
-    // Aktualizace vstupů (výběr formace, kliknutí a tažení pravým tlačítkem)
+    // Původní aktualizace vstupů pro 1 formaci (zpětná kompatibilita)
     void Update(const CameraController& camera, PikeSquare& formation);
+
+    // Rozšířená aktualizace pro více přátelských formací a kartu formace
+    void UpdateMulti(CameraController& camera, std::vector<PikeSquare>& formations, int& selectedIndex, FormationCard& card);
 
     // Vykreslení vizuálních pomůcek ve světovém prostoru (indikátor výběru, ghost silueta cíle)
     void DrawWorldOverlays(const PikeSquare& formation) const;
@@ -28,6 +33,12 @@ public:
     // Pomocný výpočet směru z drag vektoru (pro jednotkové testy)
     static float CalculateHeadingFromVector(Vector2 start, Vector2 current);
 
+    // Pomocná detekce kolize myši s formací
+    static bool IsMouseOverFormation(Vector2 worldMouse, const PikeSquare& formation);
+
+    // Detekce dvojkliku (pro jednotkové testy a UI)
+    bool CheckDoubleClick(Vector2 mousePos);
+
 private:
     bool m_isSelected{ true }; // Defaultně vybrána při spuštění pro okamžitou hratelnost
     bool m_isRmbDragging{ false };
@@ -35,7 +46,9 @@ private:
     Vector2 m_rmbDragCurrentWorld{ 0.0f, 0.0f };
     float m_dragHeading{ 0.0f };
 
-    bool IsMouseOverFormation(Vector2 worldMouse, const PikeSquare& formation) const;
+    float m_lastLmbClickTime{ -10.0f };
+    Vector2 m_lastLmbClickPos{ 0.0f, 0.0f };
+
     void DrawSelectionIndicator(const PikeSquare& formation) const;
     void DrawGhostSilhouette(const PikeSquare& formation) const;
 };

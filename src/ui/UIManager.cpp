@@ -47,7 +47,48 @@ void UIManager::DrawHUD(const PikeSquare& square, VisualMode currentMode, bool a
     DrawText("- [W, A, S, D / MMB tažení]: Pohyb kamery | [Kolečko]: Zoom", 20, 269, 13, LIGHTGRAY);
     DrawText("- [Shift + A, D]: Okamžitý maticový obrat o 90°", 20, 285, 13, LIGHTGRAY);
     DrawText("* NCO v rozích zpomalují rotaci, pokud nestíhají tempo!", 20, 303, 12, GOLD);
-    DrawText("* Linie formací se při kontaktu fyzicky odpuzují!", 20, 319, 12, SKYBLUE);
+    if (square.IsPushing()) {
+        DrawText(TextFormat("* PUSH OF PIKES: Tlak %.0f N | Padlí: %d | Zlomeno pík: %d", square.GetAverageFrontPressure(), square.GetCasualtiesCount(), square.GetBrokenPikesCount()), 20, 319, 12, RED);
+    } else {
+        DrawText(TextFormat("* Mužstvo: %d živých | %d padlých | %d zlomených pík", square.GetLivingCount(), square.GetCasualtiesCount(), square.GetBrokenPikesCount()), 20, 319, 12, SKYBLUE);
+    }
+}
+
+void UIManager::DrawFormationBar(const std::vector<PikeSquare>& formations, int selectedIndex) {
+    if (formations.empty()) return;
+
+    float barY = SCREEN_HEIGHT - 75.0f;
+    float startX = 20.0f;
+    float cardWidth = 140.0f;
+    float cardHeight = 62.0f;
+    float gap = 10.0f;
+
+    Vector2 mouse = GetMousePosition();
+
+    for (size_t i = 0; i < formations.size(); ++i) {
+        Rectangle cardRect = { startX + i * (cardWidth + gap), barY, cardWidth, cardHeight };
+        bool isSel = (static_cast<int>(i) == selectedIndex);
+        bool isHover = CheckCollisionPointRec(mouse, cardRect);
+
+        Color bg = isSel ? Color{ 40, 48, 65, 235 } : (isHover ? Color{ 32, 36, 46, 230 } : Color{ 24, 26, 33, 220 });
+        DrawRectangleRec(cardRect, bg);
+        DrawRectangleLinesEx(cardRect, isSel ? 2.0f : 1.0f, isSel ? GOLD : Color{ 80, 85, 100, 200 });
+
+        // Název jednotky
+        DrawText(formations[i].GetName().c_str(), static_cast<int>(cardRect.x + 8), static_cast<int>(cardRect.y + 6), 13, isSel ? GOLD : RAYWHITE);
+
+        // Počet mužů a stav
+        int count = static_cast<int>(formations[i].GetSoldiers().size());
+        DrawText(TextFormat("%d mužů", count), static_cast<int>(cardRect.x + 8), static_cast<int>(cardRect.y + 24), 12, LIGHTGRAY);
+
+        const char* stateStr = (formations[i].pikeState == PikeState::PORTE) ? "PORTE" : "CHARGE";
+        Color stateColor = (formations[i].pikeState == PikeState::PORTE) ? SKYBLUE : ORANGE;
+        DrawText(stateStr, static_cast<int>(cardRect.x + cardWidth - 55), static_cast<int>(cardRect.y + 24), 11, stateColor);
+
+        // Morálka (úzký proužek dole)
+        DrawRectangle(static_cast<int>(cardRect.x + 8), static_cast<int>(cardRect.y + 44), static_cast<int>(cardWidth - 16), 6, { 45, 45, 55, 255 });
+        DrawRectangle(static_cast<int>(cardRect.x + 8), static_cast<int>(cardRect.y + 44), static_cast<int>((cardWidth - 16) * formations[i].GetMorale()), 6, GREEN);
+    }
 }
 
 void UIManager::DrawLegend() {

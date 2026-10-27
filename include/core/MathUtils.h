@@ -30,6 +30,12 @@ inline Vector2 RotateVector(Vector2 v, float angleRad) {
 // Vykreslení přerušované čáry (Raylib utility)
 void DrawLineDashed(Vector2 startPos, Vector2 endPos, float dashLength, float spaceLength, Color color);
 
+// Detekce a výpočet průniku dvou úseček (p1 -> p2 a p3 -> p4)
+bool LineSegmentIntersection(Vector2 p1, Vector2 p2, Vector2 p3, Vector2 p4,
+                            Vector2* outIntersection = nullptr,
+                            float* outT1 = nullptr,
+                            float* outT2 = nullptr);
+
 } // namespace MathUtils
 
 // Export do globálního jmenného prostoru pro zpětnou i přímou kompatibilitu
@@ -37,3 +43,4 @@ using MathUtils::NormalizeAngle;
 using MathUtils::SafeNormalize;
 using MathUtils::RotateVector;
 using MathUtils::DrawLineDashed;
+using MathUtils::LineSegmentIntersection;
